@@ -17,6 +17,16 @@ Please consider donating to support my work and Myrient's service.
 
 ***
 
+## Table of Contents
+- [What the Application Does](#what-the-application-does)
+- [Screenshots](#screenshots)
+- [Troubleshooting](#troubleshooting)
+- [Requirements & Installation (Source Code)](#requirements--installation-source-code)
+- [Building Standalone Executables](#building-standalone-executables)
+- [Disclaimer](#disclaimer)
+
+***
+
 ## What the Application Does
 
 The Myrient Downloader provides a seamless process for creating curated game collections:
@@ -98,11 +108,25 @@ The Myrient Downloader provides a seamless process for creating curated game col
 
 ***
 
+## Troubleshooting
+
+### Windows "Failed to load native binding" Error
+
+On some Windows systems, you may encounter a "Failed to load native binding" error when launching the application. This is often caused by missing system DLLs.
+
+If this occurs, installing the latest Microsoft Visual C++ Redistributable package should resolve the issue. You can download it from the official Microsoft links below:
+
+*   **x64:** [https://aka.ms/vs/17/release/vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+*   **x86:** [https://aka.ms/vs/17/release/vc_redist.x86.exe](https://aka.ms/vs/17/release/vc_redist.x86.exe)
+*   **ARM64:** [https://aka.ms/vs/17/release/vc_redist.arm64.exe](https://aka.ms/vs/17/release/vc_redist.arm64.exe)
+
+***
+
 ## Requirements & Installation (Source Code)
 
 **This section is for developers or users who want to run the application from the source code (instead of downloading a pre-compiled executable), or build their own executable.**
 
-**Reccomended Node Version:** 20.9.0
+**Recommended Node Version:** 20.9.0
 
 1.  **Clone/Download:** Get all the files from this repository.
 
