@@ -246,6 +246,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const directoryStack = stateService.get('directoryStack') || [];
 
     if (currentView === 'results' || currentView === 'wizard') {
+      if (currentView === 'results' && !stateService.get('wizardSkipped')) {
+        uiManager.showView('wizard');
+        uiManager.wizardManager.setupWizard();
+        return;
+      }
+
       const fromDownloadFromHere = stateService.get('downloadFromHere');
       stateService.set('downloadFromHere', false); // Reset flag
 
