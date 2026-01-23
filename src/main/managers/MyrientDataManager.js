@@ -51,6 +51,7 @@ class MyrientDataManager {
             }
             this.allFiles = response.files;
             return {
+                files: response.files,
                 tags: response.tags,
             };
         } catch (e) {
