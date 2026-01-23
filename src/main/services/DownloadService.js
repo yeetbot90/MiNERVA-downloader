@@ -124,6 +124,21 @@ class DownloadService {
       const fileSize = fileInfo.size || 0;
       let fileDownloaded = fileInfo.downloadedBytes || 0;
 
+      if (fileDownloaded > 0) {
+        const targetExists = fs.existsSync(targetPath);
+        const partExists = fs.existsSync(partPath);
+
+        if (targetExists && !partExists) {
+          try {
+            fs.copyFileSync(targetPath, partPath);
+            this.downloadConsole.log(`Resuming from existing file, creating .part to continue.`);
+          } catch (copyErr) {
+            this.downloadConsole.logError(`Could not create .part file from ${filename} to resume. Restarting download for this file. Error: ${copyErr.message}`);
+            fileDownloaded = 0;
+          }
+        }
+      }
+
       const headers = {
         'User-Agent': 'Wget/1.21.3 (linux-gnu)'
       };
