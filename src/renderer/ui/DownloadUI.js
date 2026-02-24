@@ -25,6 +25,7 @@ export default class DownloadUI {
     this.virtualList = null;
     this.selectedFileNames = new Set();
     this.fileLookupMap = null;
+    this.showSelectedOnly = false;
     this._setupEventListeners();
     if (window.electronAPI && window.electronAPI.onExtractionStarted) {
       window.electronAPI.onExtractionStarted(() => {
@@ -408,6 +409,34 @@ export default class DownloadUI {
     this.stateService.setSelectedFilesForDownload([...finalFileList]);
     this.selectedFileNames = new Set(finalFileList.map(f => f.name_raw));
 
+    this.showSelectedOnly = false;
+    const oldBtn = document.getElementById('show-selected-toggle-btn');
+    if (oldBtn) oldBtn.remove();
+
+    if (!document.getElementById('show-selected-toggle-container') && elements.selectAllResultsBtn && elements.selectAllResultsBtn.parentNode) {
+      const container = document.createElement('div');
+      container.id = 'show-selected-toggle-container';
+      container.className = 'flex items-center bg-neutral-800 rounded-md p-1 ml-4 space-x-1 border border-neutral-700';
+
+      const createOption = (text, value) => {
+        const opt = document.createElement('div');
+        opt.className = 'px-3 py-1 rounded text-xs font-medium cursor-pointer select-none transition-colors duration-200';
+        opt.textContent = text;
+        opt.dataset.value = value;
+        opt.addEventListener('click', () => {
+          if ((value === 'selected' && !this.showSelectedOnly) || (value === 'all' && this.showSelectedOnly)) {
+            this.toggleShowSelectedOnly();
+          }
+        });
+        return opt;
+      };
+
+      container.appendChild(createOption('Show All', 'all'));
+      container.appendChild(createOption('Show Selected', 'selected'));
+      elements.selectAllResultsBtn.parentNode.appendChild(container);
+    }
+    this._updateToggleVisuals();
+
     const rowRenderer = (item) => {
       const el = document.createElement('label');
       el.className = 'flex items-center p-2 bg-neutral-900 rounded-md space-x-2 cursor-pointer border border-transparent hover:border-accent-500 hover:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-accent-500 select-none';
@@ -437,11 +466,13 @@ export default class DownloadUI {
       return el;
     };
 
+    const items = this._getFilteredItems();
+
     if (this.virtualList) {
-      this.virtualList.updateItems(finalFileList);
+      this.virtualList.updateItems(items);
     } else {
       this.virtualList = new VirtualList(elements.resultsList, {
-        items: finalFileList,
+        items: items,
         rowRenderer,
         rowHeight: 40,
         spacing: 8,
@@ -481,23 +512,23 @@ export default class DownloadUI {
     }
 
     if (forceRedownloadCheckbox && extractArchivesCheckbox) {
-        forceRedownloadCheckbox.checked = false;
-        forceRedownloadCheckbox.disabled = !extractArchivesCheckbox.checked;
-        const parentLabel = forceRedownloadCheckbox.closest('label');
-        if (parentLabel) {
-            if (!extractArchivesCheckbox.checked) {
-                parentLabel.classList.add('disabled-option');
-            } else {
-                parentLabel.classList.remove('disabled-option');
-            }
+      forceRedownloadCheckbox.checked = false;
+      forceRedownloadCheckbox.disabled = !extractArchivesCheckbox.checked;
+      const parentLabel = forceRedownloadCheckbox.closest('label');
+      if (parentLabel) {
+        if (!extractArchivesCheckbox.checked) {
+          parentLabel.classList.add('disabled-option');
+        } else {
+          parentLabel.classList.remove('disabled-option');
         }
+      }
     } else if (forceRedownloadCheckbox) {
-        forceRedownloadCheckbox.checked = false;
-        forceRedownloadCheckbox.disabled = true;
-        const parentLabel = forceRedownloadCheckbox.closest('label');
-        if (parentLabel) {
-            parentLabel.classList.add('disabled-option');
-        }
+      forceRedownloadCheckbox.checked = false;
+      forceRedownloadCheckbox.disabled = true;
+      const parentLabel = forceRedownloadCheckbox.closest('label');
+      if (parentLabel) {
+        parentLabel.classList.add('disabled-option');
+      }
     }
 
     this.updateSelectedCount();
@@ -527,7 +558,11 @@ export default class DownloadUI {
         this._updateTotalDownloadSizeDisplay();
         this.updateScanButtonState();
 
-        e.target.parentElement.focus();
+        if (this.showSelectedOnly && !checkbox.checked) {
+          this.updateResultsList();
+        } else {
+          e.target.parentElement.focus();
+        }
       }
     };
     elements.resultsList.addEventListener('change', this.resultsListChangeListener);
@@ -675,7 +710,7 @@ export default class DownloadUI {
       if (e.target.id === 'select-all-results-btn') {
         const displayedItems = this.virtualList.items;
         displayedItems.forEach(item => this.selectedFileNames.add(item.name_raw));
-        
+
         const newSelectedFiles = Array.from(this.selectedFileNames).map(name => this.fileLookupMap.get(name)).filter(Boolean);
         this.stateService.setSelectedFilesForDownload(newSelectedFiles);
 
@@ -688,16 +723,20 @@ export default class DownloadUI {
       if (e.target.id === 'deselect-all-results-btn') {
         const displayedItems = this.virtualList.items;
         const displayedItemNames = new Set(displayedItems.map(item => item.name_raw));
-        
+
         displayedItemNames.forEach(name => this.selectedFileNames.delete(name));
-        
+
         const newSelectedFiles = Array.from(this.selectedFileNames).map(name => this.fileLookupMap.get(name)).filter(Boolean);
         this.stateService.setSelectedFilesForDownload(newSelectedFiles);
 
         this._updateTotalDownloadSizeDisplay();
         this.updateSelectedCount();
         this.updateScanButtonState();
-        this.virtualList.displayItems(displayedItems);
+        if (this.showSelectedOnly) {
+          this.updateResultsList();
+        } else {
+          this.virtualList.displayItems(displayedItems);
+        }
       }
     });
 
@@ -778,18 +817,18 @@ export default class DownloadUI {
         }
         const forceRedownloadCheckbox = document.getElementById('force-redownload-checkbox');
         if (forceRedownloadCheckbox) {
-            forceRedownloadCheckbox.disabled = !e.target.checked;
-            const parentLabel = forceRedownloadCheckbox.closest('label');
-            if (parentLabel) {
-                if (!e.target.checked) {
-                    parentLabel.classList.add('disabled-option');
-                } else {
-                    parentLabel.classList.remove('disabled-option');
-                }
-            }
+          forceRedownloadCheckbox.disabled = !e.target.checked;
+          const parentLabel = forceRedownloadCheckbox.closest('label');
+          if (parentLabel) {
             if (!e.target.checked) {
-                forceRedownloadCheckbox.checked = false;
+              parentLabel.classList.add('disabled-option');
+            } else {
+              parentLabel.classList.remove('disabled-option');
             }
+          }
+          if (!e.target.checked) {
+            forceRedownloadCheckbox.checked = false;
+          }
         }
       }
 
@@ -916,7 +955,50 @@ export default class DownloadUI {
       }
     });
   }
-  
+
+  toggleShowSelectedOnly() {
+    this.showSelectedOnly = !this.showSelectedOnly;
+    this._updateToggleVisuals();
+    this.updateResultsList();
+  }
+
+  _updateToggleVisuals() {
+    const container = document.getElementById('show-selected-toggle-container');
+    if (!container) return;
+
+    Array.from(container.children).forEach(opt => {
+      const isSelected = (opt.dataset.value === 'selected' && this.showSelectedOnly) ||
+        (opt.dataset.value === 'all' && !this.showSelectedOnly);
+
+      if (isSelected) {
+        opt.classList.add('bg-accent-600', 'text-white', 'shadow-sm');
+        opt.classList.remove('text-neutral-400', 'hover:text-neutral-200');
+      } else {
+        opt.classList.remove('bg-accent-600', 'text-white', 'shadow-sm');
+        opt.classList.add('text-neutral-400', 'hover:text-neutral-200');
+      }
+    });
+  }
+
+  _getFilteredItems() {
+    const finalFileList = this.stateService.get('finalFileList') || [];
+    if (this.showSelectedOnly) {
+      return finalFileList.filter(f => this.selectedFileNames.has(f.name_raw));
+    }
+    return finalFileList;
+  }
+
+  updateResultsList() {
+    const items = this._getFilteredItems();
+    if (this.virtualList) {
+      this.virtualList.updateItems(items);
+      const elements = this._getElements();
+      if (elements.resultsFileCount) {
+        elements.resultsFileCount.textContent = items.length;
+      }
+    }
+  }
+
   /**
    * Destroys the virtual list instance.
    * @memberof DownloadUI
