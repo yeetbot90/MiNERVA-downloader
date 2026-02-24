@@ -19,8 +19,8 @@ class FilterService {
   applyFilters(allFiles, filters) {
     const listAfterTags = this._applyTagFilter(allFiles, filters.include_tags, filters.exclude_tags);
     const listAfterStrings = this._applyStringFilter(listAfterTags, filters.include_strings, filters.exclude_strings);
-    const listAfterRev = this._applyRevisionFilter(listAfterStrings, filters);
-    const finalList = this._applyDedupeFilter(listAfterRev, filters);
+    const listAfterDedupe = this._applyDedupeFilter(listAfterStrings, filters);
+    const finalList = this._applyRevisionFilter(listAfterDedupe, filters);
     return finalList;
   }
 
