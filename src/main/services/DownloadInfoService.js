@@ -93,7 +93,7 @@ class DownloadInfoService {
    *   - `skippedBecauseDownloadedCount`: Number of files skipped because they were already downloaded.
    * @throws {Error} If the scan is cancelled.
    */
-  async getDownloadInfo(win, baseUrl, items, targetDir, createSubfolder = false, maintainFolderStructure = false) {
+  async getDownloadInfo(win, baseUrl, items, targetDir, createSubfolder = false, maintainFolderStructure = false, extractAndDelete = false, forceRedownloadExtracted = false) {
     let totalSize = 0;
     let skippedSize = 0;
     const filesToDownload = [];
@@ -122,90 +122,74 @@ class DownloadInfoService {
     });
 
     for (let i = 0; i < allFilesToProcess.length; i++) {
-      if (this.isCancelled()) throw new Error("CANCELLED_SCAN");
-
-      const fileInfo = allFilesToProcess[i];
-      const filename = fileInfo.name;
-      const fileUrl = fileInfo.href;
-
-      const { targetPath, extractPath } = FileSystemService.calculatePaths(targetDir, fileInfo, { createSubfolder, maintainFolderStructure, baseUrl });
-      const partPath = `${targetPath}.part`;
-
-      if (await FileSystemService.isAlreadyExtracted(extractPath, filename)) {
-        fileInfo.skip = true;
-        fileInfo.skippedBecauseExtracted = true;
-        skippedBecauseExtractedCount++;
-        try {
-          const response = await session.head(fileUrl, { timeout: 15000 });
-          const remoteSize = parseInt(response.headers['content-length'] || '0', 10);
-          fileInfo.size = remoteSize;
-          totalSize += remoteSize;
-          skippedSize += remoteSize;
-        } catch (e) {
-        }
-        skippedFiles.push(fileInfo);
-        win.webContents.send('download-scan-progress', { current: i + 1, total: allFilesToProcess.length });
-        continue;
-      }
+      let fileNeedsDownload = true;
+      let skipReason = null;
 
       try {
+        const fileInfo = allFilesToProcess[i];
+        const filename = fileInfo.name;
+        const fileUrl = fileInfo.href;
+
+        const { targetPath, extractPath } = FileSystemService.calculatePaths(targetDir, fileInfo, { createSubfolder, maintainFolderStructure, baseUrl });
+        const partPath = `${targetPath}.part`;
+
         const response = await session.head(fileUrl, { timeout: 15000 });
         const remoteSize = parseInt(response.headers['content-length'] || '0', 10);
-
+        const remoteLastModified = response.headers['last-modified'] ? new Date(response.headers['last-modified']) : null;
         fileInfo.size = remoteSize;
         totalSize += remoteSize;
 
-        if (fs.existsSync(targetPath)) {
-          const localSize = fs.statSync(targetPath).size;
-          if (remoteSize > 0 && localSize === remoteSize) {
-            fileInfo.skip = true;
-            fileInfo.skippedBecauseDownloaded = true;
-            fileInfo.path = targetPath;
-            skippedBecauseDownloadedCount++;
-            skippedSize += remoteSize;
-            skippedFiles.push(fileInfo);
-          } else if (remoteSize > 0 && localSize < remoteSize) {
-            fileInfo.skip = false;
-            fileInfo.downloadedBytes = localSize;
-            skippedSize += localSize;
-            filesToDownload.push(fileInfo);
-          } else {
-            fileInfo.skip = false;
-            filesToDownload.push(fileInfo);
+        // Check 1: Is it already extracted and up-to-date?
+        if (extractAndDelete && await FileSystemService.isAlreadyExtracted(extractPath, filename, remoteLastModified)) {
+          if (!forceRedownloadExtracted) {
+            fileNeedsDownload = false;
+            skipReason = 'extracted';
           }
-        } else if (fs.existsSync(partPath)) {
-          const localSize = fs.statSync(partPath).size;
-          if (remoteSize > 0 && localSize < remoteSize) {
-            fileInfo.skip = false;
-            fileInfo.downloadedBytes = localSize;
-            skippedSize += localSize;
-            filesToDownload.push(fileInfo);
-          } else if (remoteSize > 0 && localSize >= remoteSize) {
-            try {
-              fs.renameSync(partPath, targetPath);
-              fileInfo.skip = true;
-              fileInfo.skippedBecauseDownloaded = true;
-              fileInfo.path = targetPath;
-              skippedBecauseDownloadedCount++;
-              skippedSize += remoteSize;
-              skippedFiles.push(fileInfo);
-            } catch (renameErr) {
-              fileInfo.skip = false;
-              filesToDownload.push(fileInfo);
+        }
+
+        // Check 2: If we still might need to download, check for the archive itself
+        if (fileNeedsDownload && fs.existsSync(targetPath)) {
+          const localStats = fs.statSync(targetPath);
+          const isSizeMatch = remoteSize > 0 && localStats.size === remoteSize;
+          let isDateMatch = false;
+          if (remoteLastModified) {
+            const localSeconds = Math.floor(localStats.mtime.getTime() / 1000);
+            const remoteSeconds = Math.floor(remoteLastModified.getTime() / 1000);
+            isDateMatch = localSeconds === remoteSeconds;
+          } else {
+            isDateMatch = true;
+          }
+
+          if (isSizeMatch && isDateMatch) {
+            fileNeedsDownload = false;
+            skipReason = 'downloaded';
+          }
+        }
+
+        if (fileNeedsDownload) {
+          if (fs.existsSync(partPath)) {
+            const localSize = fs.statSync(partPath).size;
+            if (remoteSize > 0 && localSize < remoteSize) {
+              fileInfo.downloadedBytes = localSize;
+              skippedSize += localSize;
             }
-          } else {
-            fileInfo.skip = false;
-            filesToDownload.push(fileInfo);
           }
-        } else {
-          fileInfo.skip = false;
           filesToDownload.push(fileInfo);
+        } else {
+          skippedSize += remoteSize;
+          if (skipReason === 'extracted') {
+            skippedBecauseExtractedCount++;
+            skippedFiles.push({ ...fileInfo, skip: true, skippedBecauseExtracted: true });
+          } else if (skipReason === 'downloaded') {
+            skippedBecauseDownloadedCount++;
+            skippedFiles.push({ ...fileInfo, skip: true, skippedBecauseDownloaded: true, path: targetPath });
+          }
         }
       } catch (e) {
-        skippedFiles.push(`${filename} (Scan failed for URL ${fileUrl}: ${JSON.stringify(e)})`);
-        fileInfo.skip = true;
+        skippedFiles.push(`${allFilesToProcess[i].name} (Scan failed: ${JSON.stringify(e)})`);
+      } finally {
+        win.webContents.send('download-scan-progress', { current: i + 1, total: allFilesToProcess.length });
       }
-      win.webContents.send('download-scan-progress', { current: i + 1, total: allFilesToProcess.length });
     }
 
     return { filesToDownload, totalSize, skippedSize, skippedFiles, skippedBecauseExtractedCount, skippedBecauseDownloadedCount };

@@ -52,6 +52,7 @@ const tooltipContent = {
   throttleSpeed: "Limit the download speed to the specified value. This is useful for managing bandwidth usage. You can set the speed in Kilobytes per second (KB/s) or Megabytes per second (MB/s).",
   skipScan: "Skips the pre-download scan that gets the exact size of each file. This makes the download start faster, but progress bars and time estimates will be less accurate. The ability to skip already-downloaded files will also be disabled.",
   downloadOptions: "Configure how files are downloaded and processed.",
+  forceRedownloadExtracted: "This option will force the redownload of extracted files in the target directory. The application should update files only where necessary so this is a fallback to be used if you think your files aren't syncing properly.",
   zoomHeading: "Adjust the user interface's zoom level to your preference. Changes here will apply to the entire application.",
   filterPresetsHeading: "Load a previously saved filter configuration. Presets are specific to the current archive and directory selection.",
   managePresetsHeading: "View, import, export, and delete your saved filter presets.",

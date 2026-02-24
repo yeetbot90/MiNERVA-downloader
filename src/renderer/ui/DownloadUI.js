@@ -107,6 +107,7 @@ export default class DownloadUI {
       throttleUnitSelect: document.getElementById('throttle-unit-select'),
       extractArchivesCheckbox: document.getElementById('extract-archives-checkbox'),
       extractPreviouslyDownloadedCheckbox: document.getElementById('extract-previously-downloaded-checkbox'),
+      forceRedownloadCheckbox: document.getElementById('force-redownload-checkbox'),
     };
   }
 
@@ -130,6 +131,7 @@ export default class DownloadUI {
       createSubfolderCheckbox,
       extractArchivesCheckbox: document.getElementById('extract-archives-checkbox'),
       extractPreviouslyDownloadedCheckbox: document.getElementById('extract-previously-downloaded-checkbox'),
+      forceRedownloadCheckbox: document.getElementById('force-redownload-checkbox'),
       skipScanCheckbox: document.getElementById('skip-scan-checkbox'),
       throttleDownloadCheckbox,
       throttleSpeedInput,
@@ -175,6 +177,7 @@ export default class DownloadUI {
       subfolder: els.createSubfolderCheckbox,
       extract: els.extractArchivesCheckbox,
       extractPrev: els.extractPreviouslyDownloadedCheckbox,
+      force: els.forceRedownloadCheckbox,
       skipScan: els.skipScanCheckbox,
       throttle: els.throttleDownloadCheckbox,
       throttleSpeed: els.throttleSpeedInput,
@@ -224,6 +227,7 @@ export default class DownloadUI {
       subfolder: els.createSubfolderCheckbox,
       extract: els.extractArchivesCheckbox,
       extractPrev: els.extractPreviouslyDownloadedCheckbox,
+      force: els.forceRedownloadCheckbox,
       skipScan: els.skipScanCheckbox,
       throttle: els.throttleDownloadCheckbox,
       throttleSpeed: els.throttleSpeedInput,
@@ -242,7 +246,7 @@ export default class DownloadUI {
         if (!key.startsWith('throttle')) {
           const label = control.closest('label');
           if (label) {
-            if (key === 'extractPrev') {
+            if (key === 'extractPrev' || key === 'force') {
               const extractCheckbox = controlMap.extract;
               if (extractCheckbox) {
                 label.classList.toggle('disabled-option', !extractCheckbox.checked || savedState.disabled);
@@ -451,7 +455,7 @@ export default class DownloadUI {
     elements.maintainFolderStructureCheckbox.checked = false;
     this.stateService.set('maintainFolderStructure', false);
 
-    const { throttleDownloadCheckbox, throttleSpeedInput, throttleUnitSelect, extractArchivesCheckbox, extractPreviouslyDownloadedCheckbox } = elements;
+    const { throttleDownloadCheckbox, throttleSpeedInput, throttleUnitSelect, extractArchivesCheckbox, extractPreviouslyDownloadedCheckbox, forceRedownloadCheckbox } = elements;
     if (extractArchivesCheckbox) {
       extractArchivesCheckbox.checked = false;
     }
@@ -474,6 +478,26 @@ export default class DownloadUI {
       if (parentLabel) {
         parentLabel.classList.add('disabled-option');
       }
+    }
+
+    if (forceRedownloadCheckbox && extractArchivesCheckbox) {
+        forceRedownloadCheckbox.checked = false;
+        forceRedownloadCheckbox.disabled = !extractArchivesCheckbox.checked;
+        const parentLabel = forceRedownloadCheckbox.closest('label');
+        if (parentLabel) {
+            if (!extractArchivesCheckbox.checked) {
+                parentLabel.classList.add('disabled-option');
+            } else {
+                parentLabel.classList.remove('disabled-option');
+            }
+        }
+    } else if (forceRedownloadCheckbox) {
+        forceRedownloadCheckbox.checked = false;
+        forceRedownloadCheckbox.disabled = true;
+        const parentLabel = forceRedownloadCheckbox.closest('label');
+        if (parentLabel) {
+            parentLabel.classList.add('disabled-option');
+        }
     }
 
     this.updateSelectedCount();
@@ -751,6 +775,21 @@ export default class DownloadUI {
           if (!e.target.checked) {
             extractPreviouslyDownloadedCheckbox.checked = false;
           }
+        }
+        const forceRedownloadCheckbox = document.getElementById('force-redownload-checkbox');
+        if (forceRedownloadCheckbox) {
+            forceRedownloadCheckbox.disabled = !e.target.checked;
+            const parentLabel = forceRedownloadCheckbox.closest('label');
+            if (parentLabel) {
+                if (!e.target.checked) {
+                    parentLabel.classList.add('disabled-option');
+                } else {
+                    parentLabel.classList.remove('disabled-option');
+                }
+            }
+            if (!e.target.checked) {
+                forceRedownloadCheckbox.checked = false;
+            }
         }
       }
 

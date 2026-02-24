@@ -93,36 +93,38 @@ class FileSystemService {
    * @memberof FileSystemService
    * @param {string} extractionPath The directory path where the archive's contents are expected to be extracted.
    * @param {string} archiveFilename The full filename of the archive (e.g., 'Game (USA).zip').
+   * @param {Date} [remoteLastModified=null] The 'Last-Modified' date of the remote archive file.
    * @returns {Promise<boolean>} A promise that resolves to `true` if the content appears to be extracted (based on heuristics), otherwise `false`.
    */
-  static async isAlreadyExtracted(extractionPath, archiveFilename) {
+  static async isAlreadyExtracted(extractionPath, archiveFilename, remoteLastModified = null) {
     try {
       const archiveBaseName = path.parse(archiveFilename).name;
-      const extractionPathEnd = path.basename(extractionPath);
 
-      // Scenario 1: Extraction path itself is named after the archive and contains files
-      if (extractionPathEnd.toLowerCase() === archiveBaseName.toLowerCase()) {
-        if (fs.existsSync(extractionPath) && fs.lstatSync(extractionPath).isDirectory()) {
-          const filesInDir = await fs.promises.readdir(extractionPath);
-          // If the directory is not empty and contains files other than just the archive itself
-          if (filesInDir.length > 0 && filesInDir.some(f => f.toLowerCase() !== archiveFilename.toLowerCase())) {
-            return true;
-          }
-        }
+      const entries = await fs.promises.readdir(extractionPath);
+
+      const matchingEntry = entries.find(entry => {
+        const entryBaseName = path.parse(entry).name;
+        return entryBaseName.toLowerCase() === archiveBaseName.toLowerCase();
+      });
+
+      if (!matchingEntry) {
+        return false;
       }
 
-      // Scenario 2: A subfolder within the extraction path is named after the archive and contains files
-      const potentialExtractDir = path.join(extractionPath, archiveBaseName);
-      if (fs.existsSync(potentialExtractDir) && fs.lstatSync(potentialExtractDir).isDirectory()) {
-        const filesInDir = await fs.promises.readdir(potentialExtractDir);
-        if (filesInDir.length > 0) {
-          return true;
-        }
+      const fullPathToMatchingEntry = path.join(extractionPath, matchingEntry);
+      const localStats = fs.statSync(fullPathToMatchingEntry);
+
+      if (!remoteLastModified) {
+        return true;
       }
+
+      const localSeconds = Math.floor(localStats.mtime.getTime() / 1000);
+      const remoteSeconds = Math.floor(remoteLastModified.getTime() / 1000);
+
+      return localSeconds === remoteSeconds;
     } catch (e) {
-      // Ignore errors during check, assume not extracted if any file system access fails
+      return false;
     }
-    return false;
   }
 
   /**

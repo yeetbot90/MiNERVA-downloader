@@ -437,6 +437,7 @@ class UIManager {
             stateService.set('extractPreviouslyDownloaded', e.target.checked);
           });
           this.addInfoIconToElement('extract-previously-downloaded-label', 'extractPreviouslyDownloaded');
+          this.addInfoIconToElement('force-redownload-info-icon-container', 'forceRedownloadExtracted');
           this.addInfoIconToElement('skip-scan-label', 'skipScan');
         }
         this.addInfoIconToElement('throttle-info-icon-container', 'throttleSpeed');

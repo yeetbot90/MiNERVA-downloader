@@ -64,7 +64,7 @@ class DownloadManager {
    * @param {string} throttleUnit The unit for download throttling speed (e.g., 'kb', 'mb').
    * @returns {Promise<{success: boolean}>} A promise that resolves with a success status.
    */
-  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit) {
+  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, forceRedownloadExtracted) {
     this.reset();
 
     const downloadStartTime = performance.now();
@@ -105,7 +105,7 @@ class DownloadManager {
           skippedBecauseExtractedCount: 0,
         };
       } else {
-        scanResult = await this.downloadInfoService.getDownloadInfo(this.win, baseUrl, files, targetDir, createSubfolder, maintainFolderStructure);
+        scanResult = await this.downloadInfoService.getDownloadInfo(this.win, baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, forceRedownloadExtracted);
       }
 
       if (this.isCancelled) {
@@ -418,6 +418,14 @@ class DownloadManager {
                   fs.rename(partPath, entryPath, (err) => {
                     if (err) {
                       return reject(err);
+                    }
+                    if (file.lastModified) {
+                      try {
+                        const mtime = new Date(file.lastModified);
+                        fs.utimesSync(entryPath, new Date(), mtime);
+                      } catch (utimesErr) {
+                        this.downloadConsole.logError(`Could not set modification time for ${entryPath}: ${utimesErr.message}`);
+                      }
                     }
                     this.win.webContents.send('extraction-progress', {
                       current: i,

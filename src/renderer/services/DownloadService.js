@@ -60,11 +60,12 @@ class DownloadService {
     const maintainFolderStructure = stateService.get('maintainFolderStructure');
     const extractAndDelete = document.getElementById('extract-archives-checkbox')?.checked;
     const extractPreviouslyDownloaded = document.getElementById('extract-previously-downloaded-checkbox')?.checked;
+    const forceRedownloadExtracted = document.getElementById('force-redownload-checkbox')?.checked;
     const skipScan = document.getElementById('skip-scan-checkbox').checked;
     const isThrottlingEnabled = stateService.get('isThrottlingEnabled');
     const throttleSpeed = stateService.get('throttleSpeed');
     const throttleUnit = stateService.get('throttleUnit');
-    window.electronAPI.startDownload(baseUrl, files, stateService.get('downloadDirectory'), createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit);
+    window.electronAPI.startDownload(baseUrl, files, stateService.get('downloadDirectory'), createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, forceRedownloadExtracted);
   }
 
   /**

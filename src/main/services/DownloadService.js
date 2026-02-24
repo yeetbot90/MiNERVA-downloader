@@ -156,6 +156,8 @@ class DownloadService {
           headers: headers
         });
 
+        const lastModified = response.headers['last-modified'];
+
         const writer = fs.createWriteStream(partPath, {
           highWaterMark: 1024 * 1024,
           flags: fileDownloaded > 0 ? 'a' : 'w'
@@ -222,6 +224,16 @@ class DownloadService {
               if (err) {
                 return reject(err);
               }
+
+              if (lastModified) {
+                try {
+                  const mtime = new Date(lastModified);
+                  fs.utimesSync(targetPath, new Date(), mtime);
+                } catch (utimesErr) {
+                  this.downloadConsole.logError(`Could not set modification time for ${filename}: ${utimesErr.message}`);
+                }
+              }
+
               win.webContents.send('download-file-progress', {
                   name: filename,
                   current: fileSize,
@@ -229,7 +241,7 @@ class DownloadService {
                   currentFileIndex: initialSkippedFileCount + fileIndex + 1,
                   totalFilesToDownload: totalFilesOverall
               });
-              downloadedFiles.push({ ...fileInfo, path: targetPath });
+              downloadedFiles.push({ ...fileInfo, path: targetPath, lastModified: lastModified });
               resolve();
             });
           });
