@@ -1,7 +1,7 @@
 # Myrient Downloader
 ![](assets/icon.ico)
 
-## The creator of Myrient has announced the site will be shutting down on the 31st March 2026. As such, this application will not be receiving further updates and this repository will be archived coinciding with the closure of Myrient. If somehow Myrient is saved, I will still proceed with archiving this repository and cease development on this application as I would not wish for it to be negatively impacting Myrients survival.
+## The creator of Myrient has announced the site will be shutting down on the 31st March 2026. As such, this application will not be receiving further updates and this repository will be archived coinciding with the closure of Myrient. If somehow Myrient is saved, I will still proceed with archiving this repository and cease development on this application as I would not wish for it to be negatively impacting Myrients survival. To be clear - I reached out to the Myrient support team early in this project and was given a thumbs up as I do not profit from this application and include links to donate to Myrient. I was also listed as an approved downloader but have since been removed from that list. It was never my intent to cause any harm with this project and I sincerely apologize for any part I have played in this. Moving forward I will look to work on other projects that (hopefully) have less potential for harm. Thanks for the support - watch this space.
 
 A powerful, standalone desktop application designed to provide a secure and efficient interface for accessing, filtering, and downloading public domain game archives from the [Myrient](https://myrient.erista.me/) library.
 
