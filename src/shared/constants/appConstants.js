@@ -2,7 +2,7 @@
  * The base URL for Myrient.
  * @type {string}
  */
-export const MYRIENT_BASE_URL = 'https://myrient.erista.me/files/';
+export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
 /**
  * Defines the possible directory structures for downloaded files.
  * @readonly
