@@ -1,4 +1,4 @@
-# Myrient Downloader
+# MiNERVA Downloader
 ![](assets/icon.ico)
 
 ## I am going to try revive the downloader.
