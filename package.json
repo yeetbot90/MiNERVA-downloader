@@ -1,6 +1,6 @@
 {
   "name": "minerva-downloader",
-  "version": "4.0.3",
+  "version": "5.0.0",
   "description": "A desktop app to browse, filter, and download from MiNERVA.",
   "main": "src/main/main.js",
   "type": "module",
