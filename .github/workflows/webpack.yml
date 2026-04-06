@@ -24,7 +24,7 @@ jobs:
 
     - name: Install deps
       run: |
-        npm ci
+        npm ci --no-audit --no-fund
 
     - name: Build CSS
       run: npm run build:css
