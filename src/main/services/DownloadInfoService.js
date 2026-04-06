@@ -5,6 +5,7 @@ import { URL } from 'url';
 import axios from 'axios';
 import MyrientService from './MyrientService.js';
 import FileSystemService from './FileSystemService.js';
+import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
 
 /**
  * Service responsible for gathering information about files to be downloaded.
@@ -59,7 +60,7 @@ class DownloadInfoService {
   async _recursivelyGetFilesInDirectory(directoryUrl, currentRelativePath = '') {
     let allFiles = [];
     const html = await this.myrientService.getPage(directoryUrl);
-    const links = this.myrientService.parseLinks(html);
+    const links = this.myrientService.parseLinks(html, directoryUrl);
 
     for (const link of links) {
       if (this.isCancelled()) throw new Error("CANCELLED_SCAN");
@@ -116,7 +117,7 @@ class DownloadInfoService {
       httpsAgent: this.httpAgent,
       timeout: 15000,
       headers: {
-        'User-Agent': 'Wget/1.21.3 (linux-gnu)'
+        'User-Agent': HTTP_USER_AGENT,
       },
       signal: this.abortController.signal
     });
@@ -182,13 +183,22 @@ class DownloadInfoService {
             filesToDownload.push(fileInfo);
           } else if (remoteSize > 0 && localSize >= remoteSize) {
             try {
-              fs.renameSync(partPath, targetPath);
-              fileInfo.skip = true;
-              fileInfo.skippedBecauseDownloaded = true;
-              fileInfo.path = targetPath;
-              skippedBecauseDownloadedCount++;
-              skippedSize += remoteSize;
-              skippedFiles.push(fileInfo);
+              if (localSize === remoteSize) {
+                fs.renameSync(partPath, targetPath);
+                fileInfo.skip = true;
+                fileInfo.skippedBecauseDownloaded = true;
+                fileInfo.path = targetPath;
+                skippedBecauseDownloadedCount++;
+                skippedSize += remoteSize;
+                skippedFiles.push(fileInfo);
+              } else {
+                // Part file size does not match what the server reports.
+                // Delete it so the downloader re-downloads from scratch.
+                fs.unlinkSync(partPath);
+                fileInfo.skip = false;
+                fileInfo.downloadedBytes = 0;
+                filesToDownload.push(fileInfo);
+              }
             } catch (renameErr) {
               fileInfo.skip = false;
               filesToDownload.push(fileInfo);

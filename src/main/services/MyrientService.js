@@ -1,8 +1,10 @@
 import https from 'https';
+import { URL } from 'url';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 import FileParserService from './FileParserService.js';
+import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
 
 const CONCURRENCY_LIMIT = 5;
 
@@ -21,6 +23,7 @@ class MyrientService {
     this.scrapeClient = axios.create({
       httpsAgent: this.httpAgent,
       timeout: 15000,
+      headers: { 'User-Agent': HTTP_USER_AGENT },
     });
   }
 
@@ -44,39 +47,126 @@ class MyrientService {
   }
 
   /**
-   * Parses HTML content to extract relevant links.
-   * Links that are not starting with '?', 'http', '/' or include '..' or are just './' are filtered out.
+   * Parses HTML content to extract relevant links for the current directory listing.
+   * Supports classic relative listings (e.g. Apache) and MiNERVA-style root-relative `/browse/...` or absolute same-origin URLs.
    * @memberof MyrientService
    * @param {string} html The HTML content to parse.
+   * @param {string} [pageUrl] Absolute URL of the page being parsed (required for `/` and `https://` links).
    * @returns {Array<{name: string, href: string, isDir: boolean}>} An array of link objects, each with `name`, `href`, and `isDir` properties.
    */
-  parseLinks(html) {
+  parseLinks(html, pageUrl) {
     const $ = cheerio.load(html);
     const links = [];
+
+    const legacyAccept = (h) =>
+      h &&
+      !h.startsWith('?') &&
+      !h.startsWith('http') &&
+      !h.startsWith('/') &&
+      !h.split('/').includes('..') &&
+      h !== './';
+
+    let base = null;
+    let currentPrefix = '';
+    if (typeof pageUrl === 'string' && pageUrl) {
+      try {
+        base = new URL(pageUrl);
+        currentPrefix = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
+      } catch {
+        base = null;
+      }
+    }
+
     $('a').each((i, el) => {
       const href = $(el).attr('href');
+      // Filter empty, parent-dir links, and Apache sort links (?C=N&O=D etc.) but
+      // NOT ?name=... query-only links that some pages use for /rom/ downloads.
+      if (!href || href === './' || (href.startsWith('?') && !href.startsWith('?name='))) return;
 
-      if (href &&
-        !href.startsWith('?') &&
-        !href.startsWith('http') &&
-        !href.startsWith('/') &&
-        !href.split('/').includes('..') &&
-        href !== './') {
-        const isDir = href.endsWith('/');
-        const name = decodeURIComponent(href.replace(/\/$/, ''));
+      let outHref = href;
+      let name;
+      let isDir;
 
-        const size = isDir ? null : $(el).closest('tr').find('td.size').text().trim();
+      if (base) {
+        let resolved;
+        try {
+          resolved = new URL(href, base);
+        } catch {
+          return;
+        }
+        if (resolved.origin !== base.origin) return;
 
+        const pathDecoded = decodeURI(resolved.pathname);
+        if (pathDecoded.split('/').includes('..')) return;
 
-        links.push({
-          name: name,
-          href: href,
-          isDir: isDir,
-          size: size || null
-        });
+        // MiNERVA Archive file downloads use /rom/?name=<path>, not /browse/.../file.
+        // Also handle query-only hrefs like ?name=... resolved against the /rom/ base.
+        const normalizedPath = resolved.pathname.replace(/\/$/, '');
+        if (normalizedPath === '/rom') {
+          // searchParams.get() already decodes %2F → / and %20 → space.
+          // Do NOT call decodeURIComponent again — it would corrupt names with literal % chars.
+          const nameParam = resolved.searchParams.get('name');
+          if (!nameParam) return;
+          const archivePath = nameParam; // already decoded by URLSearchParams
+          if (archivePath.endsWith('/')) return;
+          const pathParts = archivePath.replace(/^\.\/+/, '').split(/[/\\]/).filter(Boolean);
+          name = pathParts.length ? pathParts[pathParts.length - 1] : archivePath;
+          if (!name) return;
+          const rowRom = $(el).closest('tr');
+          let sizeRom = rowRom.length ? rowRom.find('td.size').text().trim() : '';
+          if (!sizeRom) {
+            sizeRom = $(el).closest('.entry').find('span').first().text().trim();
+          }
+          links.push({
+            name,
+            href: resolved.href,
+            isDir: false,
+            size: sizeRom || null,
+          });
+          return;
+        }
+
+        if (!resolved.pathname.startsWith(currentPrefix) || resolved.pathname.length <= currentPrefix.length) {
+          return;
+        }
+
+        const remainder = resolved.pathname.slice(currentPrefix.length);
+        const segments = remainder.replace(/\/$/, '').split('/').filter(Boolean);
+        if (segments.length !== 1) return;
+
+        // One segment relative to the current listing (e.g. No-Intro/). The renderer joins
+        // stack hrefs and resolves with new URL(path, baseUrl); absolute URLs break that join.
+        outHref = remainder;
+        const segment = segments[0];
+        name = decodeURIComponent(segment);
+        isDir = resolved.pathname.endsWith('/');
+      } else if (legacyAccept(href)) {
+        isDir = href.endsWith('/');
+        name = decodeURIComponent(href.replace(/\/$/, ''));
+      } else {
+        return;
       }
+
+      const row = $(el).closest('tr');
+      let size = row.length ? row.find('td.size').text().trim() : '';
+      if (!size) {
+        size = $(el).closest('.entry').find('span').first().text().trim();
+      }
+
+      links.push({
+        name,
+        href: outHref,
+        isDir,
+        size: isDir ? null : size || null
+      });
     });
-    return links;
+
+    const seen = new Set();
+    return links.filter((l) => {
+      if (seen.has(l.href)) return false;
+      seen.add(l.href);
+      return true;
+    });
   }
 
   /**
@@ -88,7 +178,7 @@ class MyrientService {
    */
   async getDirectory(url) {
     const html = await this.getPage(url);
-    const links = this.parseLinks(html);
+    const links = this.parseLinks(html, url);
     const directories = links.filter(link => link.isDir);
     const files = links.filter(link => !link.isDir);
     return {
@@ -118,7 +208,7 @@ class MyrientService {
     }
     let allRawFileLinks = [];
     const html = await this.getPage(url);
-    const links = this.parseLinks(html);
+    const links = this.parseLinks(html, url);
 
     const currentLevelFiles = [];
     const subdirectories = [];
@@ -127,12 +217,21 @@ class MyrientService {
       if (link.isDir) {
         subdirectories.push(link);
       } else {
-        const absoluteFileUrl = new URL(link.href, url).toString();
-        let relativeHref = absoluteFileUrl.replace(baseUrl, '');
-        if (relativeHref.startsWith('/')) {
-          relativeHref = relativeHref.substring(1);
+        // For MiNERVA /rom/?name=... links, link.href is already an absolute URL —
+        // preserve it as-is so the download uses the correct /rom/ endpoint.
+        // For legacy relative links, resolve them against the current page URL.
+        let fileHref;
+        if (link.href.startsWith('http://') || link.href.startsWith('https://')) {
+          fileHref = link.href;
+        } else {
+          const absoluteFileUrl = new URL(link.href, url).toString();
+          let relativeHref = absoluteFileUrl.replace(baseUrl, '');
+          if (relativeHref.startsWith('/')) {
+            relativeHref = relativeHref.substring(1);
+          }
+          fileHref = relativeHref;
         }
-        currentLevelFiles.push({ ...link, href: relativeHref, type: 'file' });
+        currentLevelFiles.push({ ...link, href: fileHref, type: 'file' });
       }
     });
 

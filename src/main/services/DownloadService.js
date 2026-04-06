@@ -4,6 +4,7 @@ import https from 'https';
 import axios from 'axios';
 import { Throttle } from '@kldzj/stream-throttle';
 import FileSystemService from './FileSystemService.js';
+import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
 
 /**
  * Service responsible for handling the actual downloading of files,
@@ -16,6 +17,43 @@ import FileSystemService from './FileSystemService.js';
  * @property {ConsoleService} downloadConsole - An instance of ConsoleService for logging download-related messages.
  */
 class DownloadService {
+  _getExpectedFinalSize(fileSize, response) {
+    // Prefer the GET response headers over scan-time HEAD sizes,
+    // since HEAD might be missing/incorrect for some endpoints.
+    const expectedFromResponse = (() => {
+      if (!response) return 0;
+      const contentRange = response?.headers?.['content-range'];
+      if (typeof contentRange === 'string') {
+        const totalMatch = contentRange.match(/\/(\d+)$/);
+        if (totalMatch) {
+          const parsedTotal = parseInt(totalMatch[1], 10);
+          if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
+            return parsedTotal;
+          }
+        }
+      }
+      const contentLength = parseInt(response?.headers?.['content-length'] || '0', 10);
+      return Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+    })();
+
+    if (expectedFromResponse > 0) return expectedFromResponse;
+
+    if (Number.isFinite(fileSize) && fileSize > 0) return fileSize;
+
+    const contentRange = response?.headers?.['content-range'];
+    if (typeof contentRange === 'string') {
+      const totalMatch = contentRange.match(/\/(\d+)$/);
+      if (totalMatch) {
+        const parsedTotal = parseInt(totalMatch[1], 10);
+        if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
+          return parsedTotal;
+        }
+      }
+    }
+    const contentLength = parseInt(response?.headers?.['content-length'] || '0', 10);
+    return Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+  }
+
   /**
    * Creates an instance of DownloadService.
    * @param {ConsoleService} downloadConsole An instance of ConsoleService for logging.
@@ -89,8 +127,8 @@ class DownloadService {
       httpsAgent: this.httpAgent,
       timeout: 15000,
       headers: {
-        'User-Agent': 'Wget/1.21.3 (linux-gnu)'
-      }
+        'User-Agent': HTTP_USER_AGENT,
+      },
     });
 
     let totalDownloaded = initialDownloadedSize;
@@ -123,9 +161,20 @@ class DownloadService {
       const fileUrl = fileInfo.href;
       const fileSize = fileInfo.size || 0;
       let fileDownloaded = fileInfo.downloadedBytes || 0;
+      let bytesDownloadedThisAttempt = 0;
+
+      // If a previous run left incomplete bytes as the final filename (not as `.part`),
+      // move it aside so we can correctly resume without losing the initial bytes.
+      if (fileDownloaded > 0 && fs.existsSync(targetPath) && !fs.existsSync(partPath)) {
+        try {
+          fs.renameSync(targetPath, partPath);
+        } catch (e) {
+          // If rename fails, we'll fall back to writing a fresh `.part` below.
+        }
+      }
 
       const headers = {
-        'User-Agent': 'Wget/1.21.3 (linux-gnu)'
+        'User-Agent': HTTP_USER_AGENT,
       };
 
       if (fileDownloaded > 0) {
@@ -141,9 +190,27 @@ class DownloadService {
           headers: headers
         });
 
+        if (response.status !== 200 && response.status !== 206) {
+          throw new Error(`Bad response status ${response.status} for ${filename}`);
+        }
+
+        const contentType = response?.headers?.['content-type'] || '';
+        if (contentType.includes('text/html')) {
+          throw new Error(`Unexpected HTML response for ${filename}; likely error page.`);
+        }
+
+        // Some servers ignore Range requests and return the full file with HTTP 200.
+        // If that happens, restart this file from scratch to avoid appending duplicate bytes.
+        if (fileDownloaded > 0 && response.status !== 206) {
+          this.downloadConsole.log(`Range not honored for ${filename}; restarting from byte 0.`);
+          fileDownloaded = 0;
+        }
+
+        const expectedFinalSizeForProgress = this._getExpectedFinalSize(fileSize, response);
+
         const writer = fs.createWriteStream(partPath, {
           highWaterMark: 1024 * 1024,
-          flags: fileDownloaded > 0 ? 'a' : 'w'
+          flags: fileDownloaded > 0 && response.status === 206 ? 'a' : 'w'
         });
 
         win.webContents.send('download-file-progress', {
@@ -181,15 +248,17 @@ class DownloadService {
 
           stream.on('data', (chunk) => {
             fileDownloaded += chunk.length;
+            bytesDownloadedThisAttempt += chunk.length;
             totalDownloaded += chunk.length;
 
             const now = performance.now();
-            if (now - lastDownloadProgressUpdateTime > 100 || fileDownloaded === fileSize) {
+            const currentExpected = expectedFinalSizeForProgress > 0 ? expectedFinalSizeForProgress : fileSize;
+            if (now - lastDownloadProgressUpdateTime > 100 || (currentExpected > 0 && fileDownloaded === currentExpected)) {
               lastDownloadProgressUpdateTime = now;
               win.webContents.send('download-file-progress', {
                 name: filename,
                 current: fileDownloaded,
-                total: fileSize,
+                total: currentExpected,
                 currentFileIndex: initialSkippedFileCount + fileIndex + 1,
                 totalFilesToDownload: totalFilesOverall
               });
@@ -203,14 +272,53 @@ class DownloadService {
           });
 
           writer.on('finish', () => {
+            let finalSize = 0;
+            try {
+              finalSize = fs.statSync(partPath).size;
+            } catch (statErr) {
+              return reject(statErr);
+            }
+
+            const expectedFinalSize = expectedFinalSizeForProgress;
+            if (expectedFinalSize > 0 && finalSize !== expectedFinalSize) {
+              const sizeError = new Error(`SIZE_MISMATCH: expected ${expectedFinalSize} bytes, got ${finalSize} bytes`);
+              try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e2) {}
+              return reject(sizeError);
+            }
+
+            // Lightweight corruption check: ZIP archives should start with the "PK" signature.
+            // This catches cases where the server returns an error HTML page but we still get a small 200/OK.
+            if (filename.toLowerCase().endsWith('.zip')) {
+              try {
+                const fd = fs.openSync(partPath, 'r');
+                const buf = Buffer.alloc(2);
+                fs.readSync(fd, buf, 0, 2, 0);
+                fs.closeSync(fd);
+                const sig = buf.toString('utf8');
+                if (sig !== 'PK') {
+                  const sigError = new Error(`BAD_ZIP_SIGNATURE: expected PK for ${filename}`);
+                  try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e2) {}
+                  return reject(sigError);
+                }
+              } catch (sigErr) {
+                try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e2) {}
+                return reject(sigErr);
+              }
+            }
+
+            // Ensure we can overwrite the final target (especially after a failed/partial previous run).
+            try {
+              if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+            } catch (unlinkErr) {}
+
             fs.rename(partPath, targetPath, (err) => {
               if (err) {
                 return reject(err);
               }
               win.webContents.send('download-file-progress', {
                   name: filename,
-                  current: fileSize,
-                  total: fileSize,
+                  current: finalSize,
+                  total: expectedFinalSize || finalSize,
                   currentFileIndex: initialSkippedFileCount + fileIndex + 1,
                   totalFilesToDownload: totalFilesOverall
               });
@@ -242,7 +350,7 @@ class DownloadService {
         this.downloadConsole.logError(`Failed to download ${filename}. Error: ${JSON.stringify(e)}`);
         skippedFiles.push(filename);
 
-        totalDownloaded -= fileDownloaded;
+        totalDownloaded -= bytesDownloadedThisAttempt;
         totalBytesFailed += fileSize;
 
         win.webContents.send('download-overall-progress', {

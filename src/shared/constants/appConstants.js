@@ -1,8 +1,15 @@
 /**
- * The base URL for Myrient.
+ * Public browse root for MiNERVA Archive directory listings (minerva-archive.org).
  * @type {string}
  */
 export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
+
+/**
+ * Identifies this app on HTTP requests (browse scrape, HEAD, GET). Keep in sync with package.json version.
+ * @type {string}
+ */
+export const HTTP_USER_AGENT =
+  'MiNERVA-Downloader/4.0.2 (+https://minerva-archive.org; desktop browse/download)';
 /**
  * Defines the possible directory structures for downloaded files.
  * @readonly

@@ -61,8 +61,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const content = await myrientDataService.loadDirectory(fullUrl);
       stateService.set('consecutiveLoadFailures', 0); // Reset on success
-      if (content.directories.length === 0 && directoryStack.length > 0) {
-        stateService.set('downloadFromHere', false); // User drilled into a leaf directory
+      // Only auto-start scraping when the listing is empty (no subdirs and no files in the HTML).
+      // MiNERVA lists files as /rom links on the same page; skipping the view hid them and confused users.
+      if (
+        content.directories.length === 0 &&
+        content.files.length === 0 &&
+        directoryStack.length > 0
+      ) {
+        stateService.set('downloadFromHere', false);
         handleDirectorySelect(directoryStack[directoryStack.length - 1]);
       } else {
         uiManager.showView('directories');
@@ -208,8 +214,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       if (confirmed) {
-        // User clicked Retry
-        loadDirectory(url);
+        const stack = stateService.get('directoryStack') || [];
+        const retryPath = stack.length > 0 ? stack.map((item) => item.href).join('') : undefined;
+        loadDirectory(retryPath);
       } else if (confirmed === false && stateService.get('consecutiveLoadFailures') >= 2) {
         // User clicked Close App after multiple failures
         windowService.closeWindow();
