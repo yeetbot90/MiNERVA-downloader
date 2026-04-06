@@ -4,6 +4,7 @@
  */
 export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
 export const MINERVA_TORRENT_CDN_BASE_URL = 'https://cdn.minerva-archive.org/torrents/';
+export const MINERVA_IDS_RAW_BASE_URL = 'https://raw.githubusercontent.com/Caprico1/Minerva-archive-ids/main/markdown-files/';
 
 /**
  * Identifies this app on HTTP requests (browse scrape, HEAD, GET). Keep in sync with package.json version.

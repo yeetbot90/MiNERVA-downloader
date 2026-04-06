@@ -321,6 +321,9 @@ class DownloadService {
       let fileUrl = fileInfo.href;
 
       if (this._isRomMetadataUrl(fileUrl)) {
+        if (!fileInfo.requestedGameName) {
+          fileInfo.requestedGameName = filename;
+        }
         const resolved = await this._resolveRomMetadataUrl(session, fileUrl);
         if (resolved?.href) {
           fileUrl = resolved.href;

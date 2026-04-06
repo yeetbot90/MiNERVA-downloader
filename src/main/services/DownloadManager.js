@@ -3,9 +3,11 @@ import DownloadService from './DownloadService.js';
 import { open } from 'yauzl-promise';
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { formatBytes, parseSize } from '../../shared/utils/formatters.js';
 import { calculateEta } from '../../shared/utils/time.js';
 import { URL } from 'url';
+import { MINERVA_IDS_RAW_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
  * Manages the overall download and extraction process.
@@ -14,6 +16,75 @@ import { URL } from 'url';
  */
 class DownloadManager {
   static TORRENT_PAYLOAD_STALL_TIMEOUT_MS = 120000;
+
+  _normalizeForMatch(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.(zip|7z|rar|iso|chd|cue|bin|img)$/i, '')
+      .replace(/[_\-.]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  async _loadIdsMarkdownForTorrent(torrentName) {
+    const fileName = `${torrentName}-ids.md`;
+    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const url = `${MINERVA_IDS_RAW_BASE_URL}${encodedFileName}`;
+    const response = await axios.get(url, {
+      timeout: 15000,
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/plain,*/*;q=0.8',
+      },
+    });
+    if (response.status < 200 || response.status >= 400 || typeof response.data !== 'string') {
+      return null;
+    }
+    return response.data;
+  }
+
+  _parseMarkdownIdRows(markdownText) {
+    const results = [];
+    if (!markdownText || typeof markdownText !== 'string') return results;
+    for (const line of markdownText.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || /^#/.test(trimmed)) continue;
+
+      // table style: | 123 | Game Name |
+      let match = trimmed.match(/^\|\s*(\d+)\s*\|\s*(.+?)\s*\|?$/);
+      if (!match) {
+        // list style: 123 - Game Name
+        match = trimmed.match(/^(\d+)\s*[-:|]\s*(.+)$/);
+      }
+      if (!match) continue;
+
+      const id = parseInt(match[1], 10);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const fileName = match[2].trim().replace(/^`|`$/g, '');
+      if (!fileName) continue;
+      results.push({ id, fileName });
+    }
+    return results;
+  }
+
+  async _resolveTorrentFileIdsForGame(torrentFileName, requestedGameName) {
+    if (!torrentFileName || !requestedGameName) return [];
+    const markdown = await this._loadIdsMarkdownForTorrent(torrentFileName);
+    if (!markdown) return [];
+    const parsedRows = this._parseMarkdownIdRows(markdown);
+    if (parsedRows.length === 0) return [];
+
+    const target = this._normalizeForMatch(requestedGameName);
+    const exactIds = parsedRows
+      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)) === target)
+      .map((row) => row.id);
+    if (exactIds.length > 0) return exactIds;
+
+    return parsedRows
+      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)).includes(target))
+      .map((row) => row.id);
+  }
 
   /**
    * Downloads payload files for downloaded .torrent manifests.
@@ -78,6 +149,52 @@ class DownloadManager {
           };
 
           const torrent = client.add(torrentFile.path, { path: destination });
+          torrent.on('ready', async () => {
+            const requestedGameName = torrentFile.requestedGameName;
+            if (!requestedGameName) return;
+
+            try {
+              const ids = await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName);
+              const idSet = new Set(ids);
+              if (idSet.size > 0) {
+                torrent.files.forEach((f, idx) => {
+                  const id = idx + 1;
+                  if (idSet.has(id)) {
+                    f.select();
+                  } else {
+                    f.deselect();
+                  }
+                });
+                this.downloadConsole.log(
+                  `Using Minerva ID mapping for ${torrentFile.name}: selected ${idSet.size} file(s) for "${requestedGameName}".`
+                );
+                return;
+              }
+
+              const normalizedRequested = this._normalizeForMatch(requestedGameName);
+              const matchedByName = torrent.files
+                .map((f, idx) => ({ file: f, id: idx + 1 }))
+                .filter(({ file }) => this._normalizeForMatch(path.basename(file.path)).includes(normalizedRequested));
+              if (matchedByName.length > 0) {
+                const selectedIds = new Set(matchedByName.map(({ id }) => id));
+                torrent.files.forEach((f, idx) => {
+                  const id = idx + 1;
+                  if (selectedIds.has(id)) {
+                    f.select();
+                  } else {
+                    f.deselect();
+                  }
+                });
+                this.downloadConsole.log(
+                  `Using filename match fallback for ${torrentFile.name}: selected ${selectedIds.size} file(s) for "${requestedGameName}".`
+                );
+              }
+            } catch (mappingErr) {
+              this.downloadConsole.logError(
+                `Failed to apply Minerva ID mapping for ${torrentFile.name}: ${mappingErr.message || mappingErr}`
+              );
+            }
+          });
           const onProgress = () => {
             this.win.webContents.send('torrent-progress', {
               phase: 'progress',
