@@ -2,6 +2,7 @@
 ![](assets/icon.ico)
 
 ## I am going to try revive the downloader.
+## Currently not working, I am trying to fix it.
 
 A powerful, standalone desktop application designed to provide a secure and efficient interface for accessing, filtering, and downloading public domain game archives from the MiNERVA https://minerva-archive.org/ library.
 
