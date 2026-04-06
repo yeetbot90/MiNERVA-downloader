@@ -3,6 +3,7 @@
  * @type {string}
  */
 export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
+export const MINERVA_TORRENT_CDN_BASE_URL = 'https://cdn.minerva-archive.org/torrents/';
 
 /**
  * Identifies this app on HTTP requests (browse scrape, HEAD, GET). Keep in sync with package.json version.

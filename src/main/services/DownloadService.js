@@ -6,7 +6,7 @@ import { Throttle } from '@kldzj/stream-throttle';
 import initSqlJs from 'sql.js';
 import { createRequire } from 'module';
 import FileSystemService from './FileSystemService.js';
-import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
+import { HTTP_USER_AGENT, MINERVA_TORRENT_CDN_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
  * Service responsible for handling the actual downloading of files,
@@ -19,6 +19,50 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @property {ConsoleService} downloadConsole - An instance of ConsoleService for logging download-related messages.
  */
 class DownloadService {
+  _getTorrentCandidates(origin, torrentPath) {
+    if (!torrentPath || typeof torrentPath !== 'string') return [];
+    const normalized = torrentPath.trim();
+    if (!normalized) return [];
+
+    const candidates = [];
+    const pushCandidate = (url) => {
+      if (!url || candidates.includes(url)) return;
+      candidates.push(url);
+    };
+
+    if (/^https?:\/\//i.test(normalized)) {
+      pushCandidate(normalized);
+      return candidates;
+    }
+
+    if (normalized.startsWith('/assets/')) {
+      pushCandidate(new URL(normalized, origin).href);
+    }
+
+    const cleaned = normalized.replace(/^\/+/, '');
+    pushCandidate(new URL(`/assets/${cleaned}`, origin).href);
+    pushCandidate(new URL(cleaned, MINERVA_TORRENT_CDN_BASE_URL).href);
+    const justName = cleaned.split('/').filter(Boolean).pop();
+    if (justName) {
+      pushCandidate(new URL(justName, MINERVA_TORRENT_CDN_BASE_URL).href);
+    }
+
+    return candidates;
+  }
+
+  async _pickReachableTorrentUrl(session, candidates) {
+    for (const candidate of candidates) {
+      try {
+        const response = await session.head(candidate, {
+          timeout: 8000,
+          validateStatus: () => true,
+        });
+        if (response.status >= 200 && response.status < 400) return candidate;
+      } catch (e) {}
+    }
+    return candidates[0] || null;
+  }
+
   _isRomMetadataUrl(fileUrl) {
     try {
       const u = new URL(fileUrl);
@@ -65,8 +109,10 @@ class DownloadService {
       stmt.free();
       if (!torrentPath) return null;
 
-      const resolved = new URL(`/assets/${torrentPath.replace(/^\/+/, '')}`, origin).href;
-      const suggestedName = decodeURIComponent(torrentPath.split('/').filter(Boolean).pop() || '');
+      const candidates = this._getTorrentCandidates(origin, torrentPath);
+      const resolved = await this._pickReachableTorrentUrl(session, candidates);
+      if (!resolved) return null;
+      const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
       return {
         href: resolved,
         name: suggestedName || null,
@@ -95,11 +141,10 @@ class DownloadService {
       })();
       if (!extractedTorrentPath) return null;
 
-      const normalizedPath = extractedTorrentPath.replace(/^https?:\/\/[^/]+/i, '');
-      const resolved = new URL(normalizedPath.startsWith('/assets/')
-        ? normalizedPath
-        : `/assets/${normalizedPath.replace(/^\/+/, '')}`, origin).href;
-      const suggestedName = decodeURIComponent(normalizedPath.split('/').filter(Boolean).pop() || '');
+      const candidates = this._getTorrentCandidates(origin, extractedTorrentPath);
+      const resolved = await this._pickReachableTorrentUrl(session, candidates);
+      if (!resolved) return null;
+      const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
       return {
         href: resolved,
         name: suggestedName || null,
