@@ -1,6 +1,6 @@
 {
   "name": "myrient-downloader",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "A desktop app to browse, filter, and download from Myrient.",
   "main": "src/main/main.js",
   "type": "module",
@@ -23,6 +23,8 @@
     "electron-log": "^5.1.5",
     "electron-store": "^8.2.0",
     "p-limit": "^7.2.0",
+    "sql.js": "^1.14.1",
+    "webtorrent": "^2.8.5",
     "yauzl": "^3.2.0",
     "yauzl-promise": "^4.0.0"
   },

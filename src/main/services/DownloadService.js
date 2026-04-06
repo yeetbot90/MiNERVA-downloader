@@ -3,6 +3,8 @@ import path from 'path';
 import https from 'https';
 import axios from 'axios';
 import { Throttle } from '@kldzj/stream-throttle';
+import initSqlJs from 'sql.js';
+import { createRequire } from 'module';
 import FileSystemService from './FileSystemService.js';
 import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
 
@@ -17,6 +19,71 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @property {ConsoleService} downloadConsole - An instance of ConsoleService for logging download-related messages.
  */
 class DownloadService {
+  _isRomMetadataUrl(fileUrl) {
+    try {
+      const u = new URL(fileUrl);
+      return u.pathname.replace(/\/$/, '') === '/rom' && !!u.searchParams.get('name');
+    } catch {
+      return false;
+    }
+  }
+
+  async _getHashesDb(session, origin) {
+    if (!this.hashDbByOrigin.has(origin)) {
+      const loadPromise = (async () => {
+        const response = await session.get(`${origin}/assets/hashes.db`, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+        });
+        const dbBytes = new Uint8Array(response.data);
+        const SQL = await this.sqlInitPromise;
+        return new SQL.Database(dbBytes);
+      })();
+      this.hashDbByOrigin.set(origin, loadPromise);
+    }
+    return this.hashDbByOrigin.get(origin);
+  }
+
+  async _resolveRomMetadataUrl(session, fileUrl) {
+    const parsed = new URL(fileUrl);
+    const origin = parsed.origin;
+    const slug = parsed.searchParams.get('name');
+    if (!slug) return null;
+
+    try {
+      const db = await this._getHashesDb(session, origin);
+      const stmt = db.prepare('SELECT torrents FROM files WHERE full_path = ? LIMIT 1');
+      stmt.bind([slug]);
+      let torrentPath = null;
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        torrentPath = typeof row.torrents === 'string' ? row.torrents : null;
+      }
+      stmt.free();
+      if (!torrentPath) return null;
+
+      const resolved = new URL(`/assets/${torrentPath.replace(/^\/+/, '')}`, origin).href;
+      const suggestedName = decodeURIComponent(torrentPath.split('/').filter(Boolean).pop() || '');
+      return {
+        href: resolved,
+        name: suggestedName || null,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  _formatDownloadError(error, fileUrl) {
+    if (!error) return `Unknown error for ${fileUrl}`;
+    const status = error?.response?.status;
+    const statusText = error?.response?.statusText;
+    const msg = error?.message || String(error);
+    if (status) {
+      return `${msg} (status ${status}${statusText ? ` ${statusText}` : ''}, url ${fileUrl})`;
+    }
+    return `${msg} (url ${fileUrl})`;
+  }
+
   _getExpectedFinalSize(fileSize, response) {
     // Prefer the GET response headers over scan-time HEAD sizes,
     // since HEAD might be missing/incorrect for some endpoints.
@@ -63,6 +130,14 @@ class DownloadService {
     this.httpAgent = new https.Agent({ keepAlive: true });
     this.abortController = new AbortController();
     this.downloadConsole = downloadConsole;
+    const require = createRequire(import.meta.url);
+    this.sqlInitPromise = initSqlJs({
+      locateFile: (file) => {
+        if (file === 'sql-wasm.wasm') return require.resolve('sql.js/dist/sql-wasm.wasm');
+        return file;
+      }
+    });
+    this.hashDbByOrigin = new Map();
   }
 
   /**
@@ -145,7 +220,23 @@ class DownloadService {
 
       if (fileInfo.skip) continue;
 
-      const filename = fileInfo.name;
+      let filename = fileInfo.name;
+      let fileUrl = fileInfo.href;
+
+      if (this._isRomMetadataUrl(fileUrl)) {
+        const resolved = await this._resolveRomMetadataUrl(session, fileUrl);
+        if (resolved?.href) {
+          fileUrl = resolved.href;
+          if (resolved.name) {
+            filename = resolved.name;
+            fileInfo.name = resolved.name;
+          }
+          this.downloadConsole.log(`Resolved ROM metadata URL to asset URL for ${filename}`);
+        } else {
+          throw new Error(`Could not resolve ROM metadata URL to downloadable asset for ${filename}`);
+        }
+      }
+
       const { targetPath } = FileSystemService.calculatePaths(targetDir, fileInfo, { createSubfolder, maintainFolderStructure, baseUrl });
       const partPath = `${targetPath}.part`;
 
@@ -158,7 +249,6 @@ class DownloadService {
         }
       }
 
-      const fileUrl = fileInfo.href;
       const fileSize = fileInfo.size || 0;
       let fileDownloaded = fileInfo.downloadedBytes || 0;
       let bytesDownloadedThisAttempt = 0;
@@ -347,7 +437,7 @@ class DownloadService {
           throw e;
         }
 
-        this.downloadConsole.logError(`Failed to download ${filename}. Error: ${JSON.stringify(e)}`);
+        this.downloadConsole.logError(`Failed to download ${filename}. Error: ${this._formatDownloadError(e, fileUrl)}`);
         skippedFiles.push(filename);
 
         totalDownloaded -= bytesDownloadedThisAttempt;

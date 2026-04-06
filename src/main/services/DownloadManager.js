@@ -14,6 +14,61 @@ import { URL } from 'url';
  */
 class DownloadManager {
   /**
+   * Downloads payload files for downloaded .torrent manifests.
+   * Falls back silently if the optional webtorrent dependency is unavailable.
+   * @param {Array<{name: string, path: string}>} downloadedFiles
+   * @param {string} targetDir
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _downloadFromTorrentFiles(downloadedFiles, targetDir) {
+    const torrentFiles = downloadedFiles.filter(
+      (f) => f?.path && typeof f.name === 'string' && f.name.toLowerCase().endsWith('.torrent')
+    );
+    if (torrentFiles.length === 0) return;
+
+    let WebTorrent;
+    try {
+      const mod = await import('webtorrent');
+      WebTorrent = mod.default;
+    } catch {
+      this.downloadConsole.log('Torrent payload download skipped: install `webtorrent` to enable it.');
+      return;
+    }
+
+    for (const torrentFile of torrentFiles) {
+      if (this.isCancelled) break;
+      const destination = path.join(targetDir, path.parse(torrentFile.name).name);
+      await fs.promises.mkdir(destination, { recursive: true });
+      this.downloadConsole.log(`Starting torrent payload download for ${torrentFile.name}`);
+
+      const client = new WebTorrent();
+      try {
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            try { client.destroy(); } catch (e) {}
+          };
+
+          const torrent = client.add(torrentFile.path, { path: destination });
+          torrent.on('error', (err) => {
+            cleanup();
+            reject(err);
+          });
+          torrent.on('warning', () => {});
+          torrent.on('done', () => {
+            cleanup();
+            resolve();
+          });
+        });
+        this.downloadConsole.log(`Torrent payload download complete: ${torrentFile.name}`);
+      } catch (e) {
+        this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${e.message || e}`);
+        try { client.destroy(); } catch (destroyErr) {}
+      }
+    }
+  }
+
+  /**
    * Creates an instance of DownloadManager.
    * @param {Electron.BrowserWindow} win The Electron BrowserWindow instance.
    * @param {ConsoleService} downloadConsole An instance of ConsoleService for logging.
@@ -204,6 +259,10 @@ class DownloadManager {
     if (extractAndDelete && !wasCancelled && filesForExtraction.length > 0) {
       this.downloadConsole.logDownloadStartingExtraction();
       await this.extractFiles(filesForExtraction, targetDir, createSubfolder, maintainFolderStructure);
+    }
+
+    if (!wasCancelled && downloadedFiles.length > 0) {
+      await this._downloadFromTorrentFiles(downloadedFiles, targetDir);
     }
 
     this.win.webContents.send('download-complete', {

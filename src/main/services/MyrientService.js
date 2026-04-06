@@ -14,6 +14,81 @@ const CONCURRENCY_LIMIT = 5;
  */
 class MyrientService {
   /**
+   * Determines whether a resolved URL is a likely direct downloadable file link
+   * outside the current browse prefix (e.g. /assets/... .torrent buttons).
+   * @param {URL} resolved
+   * @returns {boolean}
+   * @private
+   */
+  _isDirectDownloadLink(resolved) {
+    if (!resolved || resolved.pathname.endsWith('/')) return false;
+    const lowerPath = resolved.pathname.toLowerCase();
+    const fileLikeExtRegex = /\.(torrent|zip|7z|rar|iso|chd|cue|bin|img|gz|bz2|xz|zst)$/i;
+    return lowerPath.includes('/assets/') || fileLikeExtRegex.test(lowerPath);
+  }
+
+  /**
+   * Extracts likely download URLs from non-anchor attributes used by scripted buttons.
+   * @param {string} html
+   * @param {string} pageUrl
+   * @returns {Array<{name: string, href: string, isDir: boolean, size: null}>}
+   * @private
+   */
+  _extractDownloadButtons(html, pageUrl) {
+    const $ = cheerio.load(html);
+    let base;
+    try {
+      base = new URL(pageUrl);
+    } catch {
+      return [];
+    }
+
+    const urlTokenRegex = /(https?:\/\/[^\s"'`<>]+|\/[^\s"'`<>]+)/g;
+    const attrNames = ['href', 'data-href', 'data-url', 'data-download', 'data-download-url', 'onclick'];
+    const seen = new Set();
+    const out = [];
+
+    $('[href], button, [data-href], [data-url], [data-download], [data-download-url], [onclick]').each((_, el) => {
+      for (const attrName of attrNames) {
+        const raw = $(el).attr(attrName);
+        if (!raw || typeof raw !== 'string') continue;
+
+        const matches = raw.match(urlTokenRegex) || [];
+        for (const token of matches) {
+          let resolved;
+          try {
+            resolved = new URL(token, base);
+          } catch {
+            continue;
+          }
+          if (resolved.origin !== base.origin) continue;
+          const normalizedPath = resolved.pathname.replace(/\/$/, '');
+
+          const isRomNameLink = normalizedPath === '/rom' && !!resolved.searchParams.get('name');
+          if (!isRomNameLink && !this._isDirectDownloadLink(resolved)) continue;
+          if (seen.has(resolved.href)) continue;
+          seen.add(resolved.href);
+
+          let name = '';
+          if (isRomNameLink) {
+            const nameParam = resolved.searchParams.get('name') || '';
+            const parts = nameParam.split(/[/\\]/).filter(Boolean);
+            name = parts.length ? parts[parts.length - 1] : nameParam;
+          } else {
+            const segments = resolved.pathname.split('/').filter(Boolean);
+            name = segments.length ? decodeURIComponent(segments[segments.length - 1]) : resolved.pathname;
+          }
+
+          if (!name) continue;
+          out.push({ name, href: resolved.href, isDir: false, size: null });
+        }
+      }
+    });
+
+    return out;
+  }
+
+  /**
    * Creates an instance of MyrientService.
    * @param {FileParserService} fileParser An instance of FileParserService.
    */
@@ -127,19 +202,29 @@ class MyrientService {
         }
 
         if (!resolved.pathname.startsWith(currentPrefix) || resolved.pathname.length <= currentPrefix.length) {
-          return;
+          // Some pages expose a separate direct download button (e.g. torrent under /assets/...).
+          // Keep those as file entries instead of discarding them due to prefix mismatch.
+          if (this._isDirectDownloadLink(resolved)) {
+            outHref = resolved.href;
+            const segments = resolved.pathname.split('/').filter(Boolean);
+            const lastSegment = segments.length ? segments[segments.length - 1] : '';
+            name = lastSegment ? decodeURIComponent(lastSegment) : decodeURIComponent(resolved.pathname);
+            isDir = false;
+          } else {
+            return;
+          }
+        } else {
+          const remainder = resolved.pathname.slice(currentPrefix.length);
+          const segments = remainder.replace(/\/$/, '').split('/').filter(Boolean);
+          if (segments.length !== 1) return;
+
+          // One segment relative to the current listing (e.g. No-Intro/). The renderer joins
+          // stack hrefs and resolves with new URL(path, baseUrl); absolute URLs break that join.
+          outHref = remainder;
+          const segment = segments[0];
+          name = decodeURIComponent(segment);
+          isDir = resolved.pathname.endsWith('/');
         }
-
-        const remainder = resolved.pathname.slice(currentPrefix.length);
-        const segments = remainder.replace(/\/$/, '').split('/').filter(Boolean);
-        if (segments.length !== 1) return;
-
-        // One segment relative to the current listing (e.g. No-Intro/). The renderer joins
-        // stack hrefs and resolves with new URL(path, baseUrl); absolute URLs break that join.
-        outHref = remainder;
-        const segment = segments[0];
-        name = decodeURIComponent(segment);
-        isDir = resolved.pathname.endsWith('/');
       } else if (legacyAccept(href)) {
         isDir = href.endsWith('/');
         name = decodeURIComponent(href.replace(/\/$/, ''));
@@ -161,8 +246,10 @@ class MyrientService {
       });
     });
 
+    const fallbackButtonLinks = this._extractDownloadButtons(html, pageUrl);
+    const merged = [...links, ...fallbackButtonLinks];
     const seen = new Set();
-    return links.filter((l) => {
+    return merged.filter((l) => {
       if (seen.has(l.href)) return false;
       seen.add(l.href);
       return true;

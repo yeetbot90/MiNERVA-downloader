@@ -14,6 +14,46 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  */
 class DownloadInfoService {
   /**
+   * Best-effort remote size fetch. Falls back from HEAD to ranged GET.
+   * @param {import('axios').AxiosInstance} session
+   * @param {string} fileUrl
+   * @returns {Promise<number>}
+   * @private
+   */
+  async _getRemoteSize(session, fileUrl) {
+    try {
+      const headRes = await session.head(fileUrl, { timeout: 15000 });
+      const size = parseInt(headRes.headers['content-length'] || '0', 10);
+      if (Number.isFinite(size) && size > 0) return size;
+    } catch (e) {
+      // Fall through to GET range probe.
+    }
+
+    try {
+      const probeRes = await session.get(fileUrl, {
+        timeout: 15000,
+        responseType: 'stream',
+        headers: { Range: 'bytes=0-0' }
+      });
+
+      const contentRange = probeRes.headers['content-range'];
+      if (typeof contentRange === 'string') {
+        const match = contentRange.match(/\/(\d+)$/);
+        if (match) {
+          const parsed = parseInt(match[1], 10);
+          if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+      }
+      const size = parseInt(probeRes.headers['content-length'] || '0', 10);
+      if (Number.isFinite(size) && size > 0) return size;
+    } catch (e) {
+      // Return unknown size.
+    }
+
+    return 0;
+  }
+
+  /**
    * Creates an instance of DownloadInfoService.
    * @param {MyrientService} myrientService An instance of MyrientService.
    */
@@ -136,22 +176,17 @@ class DownloadInfoService {
         fileInfo.skip = true;
         fileInfo.skippedBecauseExtracted = true;
         skippedBecauseExtractedCount++;
-        try {
-          const response = await session.head(fileUrl, { timeout: 15000 });
-          const remoteSize = parseInt(response.headers['content-length'] || '0', 10);
-          fileInfo.size = remoteSize;
-          totalSize += remoteSize;
-          skippedSize += remoteSize;
-        } catch (e) {
-        }
+        const remoteSize = await this._getRemoteSize(session, fileUrl);
+        fileInfo.size = remoteSize;
+        totalSize += remoteSize;
+        skippedSize += remoteSize;
         skippedFiles.push(fileInfo);
         win.webContents.send('download-scan-progress', { current: i + 1, total: allFilesToProcess.length });
         continue;
       }
 
       try {
-        const response = await session.head(fileUrl, { timeout: 15000 });
-        const remoteSize = parseInt(response.headers['content-length'] || '0', 10);
+        const remoteSize = await this._getRemoteSize(session, fileUrl);
 
         fileInfo.size = remoteSize;
         totalSize += remoteSize;
@@ -212,8 +247,10 @@ class DownloadInfoService {
           filesToDownload.push(fileInfo);
         }
       } catch (e) {
-        skippedFiles.push(`${filename} (Scan failed for URL ${fileUrl}: ${JSON.stringify(e)})`);
-        fileInfo.skip = true;
+        // Keep file in queue even if scan metadata fails; downloader can still attempt transfer.
+        fileInfo.size = Number.isFinite(fileInfo.size) ? fileInfo.size : 0;
+        fileInfo.skip = false;
+        filesToDownload.push(fileInfo);
       }
       win.webContents.send('download-scan-progress', { current: i + 1, total: allFilesToProcess.length });
     }
