@@ -93,7 +93,8 @@ jobs:
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
           TAG_NAME: ${{ needs.bump_version.outputs.tag || github.ref_name }}
         run: |
-          gh release view "$TAG_NAME" >/dev/null 2>&1 || gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Automated release for $TAG_NAME"
-          gh release upload "$TAG_NAME" dist-artifacts/* --clobber
+          gh release view "$TAG_NAME" --repo "$REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG_NAME" --repo "$REPOSITORY" --title "$TAG_NAME" --notes "Automated release for $TAG_NAME"
+          gh release upload "$TAG_NAME" dist-artifacts/* --repo "$REPOSITORY" --clobber
