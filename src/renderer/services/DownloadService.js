@@ -64,7 +64,8 @@ class DownloadService {
     const isThrottlingEnabled = stateService.get('isThrottlingEnabled');
     const throttleSpeed = stateService.get('throttleSpeed');
     const throttleUnit = stateService.get('throttleUnit');
-    window.electronAPI.startDownload(baseUrl, files, stateService.get('downloadDirectory'), createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit);
+    const torrentClient = stateService.get('torrentClient') || 'aria2';
+    window.electronAPI.startDownload(baseUrl, files, stateService.get('downloadDirectory'), createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient);
   }
 
   /**
