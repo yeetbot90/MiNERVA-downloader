@@ -26,26 +26,23 @@ class DownloadManager {
   _normalizeForMatch(value) {
     let normalized = String(value || '')
       .replace(/^.*[\\/]/, '')
+      .replace(/[?#].*$/, '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
       .replace(/\[[^\]]*]/g, ' ')
-      .replace(/\([^)]*?\b(rev|beta|proto|sample|demo|alt)\b[^)]*\)/gi, ' ')
+      .replace(/\([^)]*\)/g, ' ')
       .toLowerCase()
       .trim();
 
-    // Some entries use chained extensions (e.g. .zip.001), while others have uncommon ROM formats.
-    // Strip up to 3 generic extension segments from the end to improve matching without hard-coding every format.
-    for (let i = 0; i < 3; i += 1) {
-      const next = normalized.replace(/\.(?:[a-z0-9]{1,8}|part\d{1,3}|r\d{2,3}|z\d{2,3}|zip\.\d{3})$/i, '');
-      if (next === normalized) break;
-      normalized = next.trim();
-    }
+    // Strip common split/archive suffixes (e.g. .zip.001, .7z.010, .part01) and
+    // then remove a trailing extension chain to avoid hard-coding every ROM/file type.
+    normalized = normalized
+      .replace(/\.(?:part\d{1,3}|z\d{2,3}|\d{3,4})$/i, '')
+      .replace(/\.[a-z][a-z0-9+_-]{0,15}(?:\.[a-z0-9][a-z0-9+_-]{0,15})?$/i, '');
 
     return normalized
-
-  _normalizeForMatch(value) {
-    return String(value || '')
-      .toLowerCase()
-      .replace(/\.(zip|7z|rar|iso|chd|cue|bin|img)$/i, '')
       .replace(/[_\-.]+/g, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -95,7 +92,18 @@ class DownloadManager {
       if (/^\|\s*:?-{2,}:?\s*\|/.test(trimmed)) continue; // markdown table separator row
 
       // table style: | 123 | Game Name |
-      let match = trimmed.match(/^\|\s*(\d+)\s*\|\s*(.+?)\s*\|?$/);
+      // Also supports extra pipes in file names by only splitting first "id" column.
+      let match = null;
+      if (trimmed.startsWith('|')) {
+        const cols = trimmed.split('|');
+        if (cols.length >= 3) {
+          const idText = (cols[1] || '').trim();
+          const nameText = cols.slice(2).join('|').replace(/\|\s*$/, '').trim();
+          if (/^\d+$/.test(idText) && nameText) {
+            match = [trimmed, idText, nameText];
+          }
+        }
+      }
       if (!match) {
         // list style: 123 - Game Name
         match = trimmed.match(/^(\d+)\s*[-:|]\s*(.+)$/);
