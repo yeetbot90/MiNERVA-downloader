@@ -112,7 +112,7 @@ The MiNERVA Downloader provides a seamless process for creating curated game col
 2.  **Install Dependencies:** Open a terminal in the project's root folder (where `package.json` is) and run:
 
     ```bash
-    npm install
+    npm install --no-audit --no-fund
     ```
 
 3.  **Run the App (Development Mode):**
@@ -132,9 +132,48 @@ The project is configured with `electron-builder` to generate ready-to-run execu
 | Target OS | Command | Output |
 | :--- | :--- | :--- |
 | **Windows** | `npm run build:win` | Portable `.exe` |
+| **Windows (Portable Only)** | `npm run build:win:portable` | Portable `.exe` |
+| **Windows (Folder Build)** | `npm run build:win:folder` | `win-unpacked/` folder |
 | **macOS** | `npm run build:mac` | `.dmg` |
 | **Linux** | `npm run build:linux` | `.AppImage` |
 | **Current OS (All)** | `npm run build:all` | Target for the current OS |
+
+### Portable build quick-start
+
+1. Install dependencies:
+   ```bash
+   npm ci
+   ```
+2. Build a **portable Windows `.exe`**:
+   ```bash
+   npm run build:win:portable
+   ```
+3. Build a **Linux `.AppImage`**:
+   ```bash
+   npm run build:linux
+   ```
+4. Optional: build a **Windows folder/unpacked app**:
+   ```bash
+   npm run build:win:folder
+   ```
+
+Build outputs are written to the `release/` folder.
+
+> Note: `electron-builder` works best when building on the same OS as the target artifact (Linux for AppImage, Windows for portable `.exe`).
+> On Windows, `electron-builder` may also create a `win-unpacked/` directory during the build. For a true portable build, share/use the generated portable `.exe` artifact in `release/` (you do not need to ship `win-unpacked` with it).
+
+### Automated GitHub release builds (version bump + artifacts)
+
+Use the **Release Build (Windows Portable + Linux AppImage)** GitHub Actions workflow:
+
+1. Open **Actions** in GitHub.
+2. Run **Release Build (Windows Portable + Linux AppImage)** manually.
+3. Choose bump type: `patch`, `minor`, or `major`.
+
+The workflow will:
+- bump `package.json` version and create/push a git tag (`vX.Y.Z`),
+- build a portable Windows `.exe` and Linux `.AppImage`,
+- upload both to a GitHub Release for that tag.
 
 ## Disclaimer
 
