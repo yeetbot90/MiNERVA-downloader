@@ -40,6 +40,11 @@ class DownloadManager {
     }
 
     return normalized
+
+  _normalizeForMatch(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.(zip|7z|rar|iso|chd|cue|bin|img)$/i, '')
       .replace(/[_\-.]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
