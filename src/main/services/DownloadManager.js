@@ -3,9 +3,13 @@ import DownloadService from './DownloadService.js';
 import { open } from 'yauzl-promise';
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { formatBytes, parseSize } from '../../shared/utils/formatters.js';
 import { calculateEta } from '../../shared/utils/time.js';
 import { URL } from 'url';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { MINERVA_IDS_RAW_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
  * Manages the overall download and extraction process.
@@ -13,7 +17,260 @@ import { URL } from 'url';
  * @class
  */
 class DownloadManager {
-  static TORRENT_PAYLOAD_TIMEOUT_MS = 120000;
+  static TORRENT_PAYLOAD_STALL_TIMEOUT_MS = 120000;
+  static LOCAL_MINERVA_IDS_DIR = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../vendor/minerva-archive-ids/markdown-files'
+  );
+
+  _normalizeForMatch(value) {
+    let normalized = String(value || '')
+      .replace(/^.*[\\/]/, '')
+      .replace(/[?#].*$/, '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\[[^\]]*]/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .toLowerCase()
+      .trim();
+
+    // Strip common split/archive suffixes (e.g. .zip.001, .7z.010, .part01) and
+    // then remove a trailing extension chain to avoid hard-coding every ROM/file type.
+    normalized = normalized
+      .replace(/\.(?:part\d{1,3}|z\d{2,3}|\d{3,4})$/i, '')
+      .replace(/\.[a-z][a-z0-9+_-]{0,15}(?:\.[a-z0-9][a-z0-9+_-]{0,15})?$/i, '');
+
+    return normalized
+      .replace(/[_\-.]+/g, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  async _loadIdsMarkdownForTorrent(torrentName) {
+    const fileName = `${torrentName}-ids.md`;
+    const localPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    try {
+      const localContents = await fs.promises.readFile(localPath, 'utf8');
+      if (typeof localContents === 'string' && localContents.trim()) {
+        return localContents;
+      }
+    } catch {
+      // Local vendored map not found; continue with remote fallback.
+    }
+
+    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const baseCandidates = [
+      MINERVA_IDS_RAW_BASE_URL,
+      'https://raw.githubusercontent.com/Caprico1/Minerva-archive-ids/main/markdown-files/',
+    ];
+
+    for (const baseUrl of baseCandidates) {
+      const url = `${baseUrl}${encodedFileName}`;
+      const response = await axios.get(url, {
+        timeout: 15000,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'text/plain,*/*;q=0.8',
+        },
+      });
+      if (response.status >= 200 && response.status < 400 && typeof response.data === 'string') {
+        return response.data;
+      }
+    }
+
+    return null;
+  }
+
+  _parseMarkdownIdRows(markdownText) {
+    const results = [];
+    if (!markdownText || typeof markdownText !== 'string') return results;
+    for (const line of markdownText.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || /^#/.test(trimmed)) continue;
+      if (/^\|\s*:?-{2,}:?\s*\|/.test(trimmed)) continue; // markdown table separator row
+
+      // table style: | 123 | Game Name |
+      // Also supports extra pipes in file names by only splitting first "id" column.
+      let match = null;
+      if (trimmed.startsWith('|')) {
+        const cols = trimmed.split('|');
+        if (cols.length >= 3) {
+          const idText = (cols[1] || '').trim();
+          const nameText = cols.slice(2).join('|').replace(/\|\s*$/, '').trim();
+          if (/^\d+$/.test(idText) && nameText) {
+            match = [trimmed, idText, nameText];
+          }
+        }
+      }
+      if (!match) {
+        // list style: 123 - Game Name
+        match = trimmed.match(/^(\d+)\s*[-:|]\s*(.+)$/);
+      }
+      if (!match) {
+        // ordered list style: 123. Game Name
+        match = trimmed.match(/^(\d+)\.\s+(.+)$/);
+      }
+      if (!match) {
+        // bullet + id style: - 123 - Game Name
+        match = trimmed.match(/^[-*]\s*(\d+)\s*[-:|]\s*(.+)$/);
+      }
+      if (!match) {
+        // csv style: 123,Game Name
+        match = trimmed.match(/^(\d+)\s*,\s*(.+)$/);
+      }
+      if (!match) {
+        // markdown link style: [123](link) - Game Name OR [123](link)|Game Name
+        match = trimmed.match(/^\[\s*(\d+)\s*]\([^)]*\)\s*[-:|]\s*(.+)$/);
+      }
+      if (!match) continue;
+
+      const id = parseInt(match[1], 10);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const fileName = match[2]
+        .trim()
+        .replace(/^`|`$/g, '')
+        .replace(/^\[|\]$/g, '')
+        .replace(/^"+|"+$/g, '')
+        .replace(/^\*+|\*+$/g, '')
+        .replace(/^_+|_+$/g, '')
+        .trim();
+      if (!fileName) continue;
+      results.push({ id, fileName });
+    }
+    return results;
+  }
+
+  async _resolveTorrentFileIdsForGame(torrentFileName, requestedGameName) {
+    if (!torrentFileName || !requestedGameName) return [];
+    const markdown = await this._loadIdsMarkdownForTorrent(torrentFileName);
+    if (!markdown) return [];
+    const parsedRows = this._parseMarkdownIdRows(markdown);
+    if (parsedRows.length === 0) return [];
+
+    const target = this._normalizeForMatch(requestedGameName);
+    const exactIds = parsedRows
+      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)) === target)
+      .map((row) => row.id);
+    if (exactIds.length > 0) return exactIds;
+
+    return parsedRows
+      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)).includes(target))
+      .map((row) => row.id);
+  }
+
+  _applyFileSelection(torrent, selectedFileIds) {
+    const selectedIds = new Set(selectedFileIds.filter((id) => Number.isFinite(id) && id > 0));
+    if (selectedIds.size === 0) return 0;
+
+    if (typeof torrent.deselect === 'function' && Number.isFinite(torrent.pieces?.length) && torrent.pieces.length > 0) {
+      torrent.deselect(0, torrent.pieces.length - 1, false);
+    }
+
+    let selectedCount = 0;
+    torrent.files.forEach((f, idx) => {
+      const id = idx + 1;
+      if (selectedIds.has(id)) {
+        f.select();
+        selectedCount += 1;
+      } else {
+        f.deselect();
+      }
+    });
+    return selectedCount;
+  }
+
+  _buildAria2Args(torrentPath, destination, selectedIds = []) {
+    const args = [
+      '--seed-time=0',
+      '--file-allocation=none',
+      '--check-integrity=false',
+      '--bt-save-metadata=true',
+      '--follow-torrent=mem',
+      '--summary-interval=1',
+      '--console-log-level=warn',
+      '--download-result=default',
+      `--dir=${destination}`,
+    ];
+
+    if (selectedIds.length > 0) {
+      args.push(`--select-file=${selectedIds.join(',')}`);
+    }
+
+    args.push(torrentPath);
+    return args;
+  }
+
+  async _runAria2ForTorrent(torrentFile, destination) {
+    const requestedGameName = torrentFile.requestedGameName;
+    const ids = requestedGameName
+      ? await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName)
+      : [];
+    if (requestedGameName && ids.length === 0) {
+      return { attempted: false, reason: 'no-id-match' };
+    }
+
+    const args = this._buildAria2Args(torrentFile.path, destination, ids);
+    await new Promise((resolve, reject) => {
+      const proc = spawn('aria2c', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      proc.stdout.on('data', (chunk) => {
+        const text = String(chunk || '').trim();
+        if (text) this.downloadConsole.log(`[aria2] ${text}`);
+      });
+      proc.stderr.on('data', (chunk) => {
+        const text = String(chunk || '').trim();
+        if (text) {
+          stderr += `${text}\n`;
+          this.downloadConsole.log(`[aria2] ${text}`);
+        }
+      });
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0) return resolve();
+        reject(new Error(`aria2c exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+      });
+    });
+
+    return { attempted: true, selectedIds: ids };
+  }
+
+  async _tryAria2First(torrentFile, destination) {
+    try {
+      const outcome = await this._runAria2ForTorrent(torrentFile, destination);
+      if (outcome.attempted) {
+        const selectedInfo = outcome.selectedIds?.length
+          ? `${outcome.selectedIds.length} selected file id(s)`
+          : 'all files selected';
+        this.downloadConsole.log(`aria2c payload download complete for ${torrentFile.name} (${selectedInfo}).`);
+      } else if (outcome.reason === 'no-id-match') {
+        this.downloadConsole.log(`aria2c skipped for ${torrentFile.name}: no Minerva ID match for requested game.`);
+      }
+      return outcome;
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/ENOENT|not found/i.test(message)) {
+        this.downloadConsole.log('aria2c not found on PATH, falling back to built-in WebTorrent.');
+        return { attempted: false, reason: 'aria2-not-installed' };
+      }
+      this.downloadConsole.logError(`aria2c failed for ${torrentFile.name}: ${message}. Falling back to WebTorrent.`);
+      return { attempted: false, reason: 'aria2-failed' };
+    }
+  }
+
+  _getPreferredTorrentClient() {
+    const preferred = String(this.torrentClient || 'aria2').toLowerCase();
+    if (['webtorrent', 'aria2', 'qbittorrent'].includes(preferred)) return preferred;
+    return 'aria2';
+  }
+
+  async _tryQbittorrentFirst(torrentFile) {
+    this.downloadConsole.log(
+      `qBittorrent engine selected for ${torrentFile.name}, but WebUI integration is not configured in this build. Falling back to WebTorrent.`
+    );
+    return { attempted: false, reason: 'qbittorrent-not-configured' };
+  }
 
   /**
    * Downloads payload files for downloaded .torrent manifests.
@@ -53,20 +310,86 @@ class DownloadManager {
         numPeers: 0
       });
 
+      const preferredEngine = this._getPreferredTorrentClient();
+      const externalOutcome = preferredEngine === 'aria2'
+        ? await this._tryAria2First(torrentFile, destination)
+        : preferredEngine === 'qbittorrent'
+          ? await this._tryQbittorrentFirst(torrentFile, destination)
+          : { attempted: false, reason: 'webtorrent-selected' };
+
+      if (externalOutcome.attempted) {
+        this.win.webContents.send('torrent-progress', {
+          phase: 'done',
+          name: torrentFile.name,
+          current: 0,
+          total: 0,
+          progress: 1,
+          downloadSpeed: 0,
+          numPeers: 0
+        });
+        continue;
+      }
+
       const client = new WebTorrent();
       try {
         await new Promise((resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-            try { client.destroy(); } catch (e) {}
-            reject(new Error(`Timed out waiting for torrent peers after ${Math.round(DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS / 1000)}s`));
-          }, DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS);
+          let lastActivityAt = Date.now();
+          let stalledWithoutPeers = true;
+          const markActivity = () => {
+            lastActivityAt = Date.now();
+            stalledWithoutPeers = false;
+          };
+          const stallCheckInterval = setInterval(() => {
+            const stalledFor = Date.now() - lastActivityAt;
+            if (stalledWithoutPeers && stalledFor >= DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS) {
+              try { client.destroy(); } catch (e) {}
+              reject(new Error(
+                `Timed out waiting for torrent transfer activity after ${Math.round(DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS / 1000)}s`
+              ));
+            }
+          }, 1000);
 
           const cleanup = () => {
-            clearTimeout(timeoutId);
+            clearInterval(stallCheckInterval);
             try { client.destroy(); } catch (e) {}
           };
 
           const torrent = client.add(torrentFile.path, { path: destination });
+          torrent.on('ready', async () => {
+            const requestedGameName = torrentFile.requestedGameName;
+            if (!requestedGameName) return;
+
+            try {
+              const ids = await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName);
+              const selectedByMapCount = this._applyFileSelection(torrent, ids);
+              if (selectedByMapCount > 0) {
+                this.downloadConsole.log(
+                  `Using Minerva ID mapping for ${torrentFile.name}: selected ${selectedByMapCount} file(s) for "${requestedGameName}".`
+                );
+                return;
+              }
+
+              const normalizedRequested = this._normalizeForMatch(requestedGameName);
+              const matchedByName = torrent.files
+                .map((f, idx) => ({ file: f, id: idx + 1 }))
+                .filter(({ file }) => this._normalizeForMatch(path.basename(file.path)).includes(normalizedRequested));
+              if (matchedByName.length > 0) {
+                const selectedCount = this._applyFileSelection(torrent, matchedByName.map(({ id }) => id));
+                this.downloadConsole.log(
+                  `Using filename match fallback for ${torrentFile.name}: selected ${selectedCount} file(s) for "${requestedGameName}".`
+                );
+                return;
+              }
+
+              this.downloadConsole.log(
+                `No Minerva ID/filename match found for "${requestedGameName}" in ${torrentFile.name}; downloading full torrent payload.`
+              );
+            } catch (mappingErr) {
+              this.downloadConsole.logError(
+                `Failed to apply Minerva ID mapping for ${torrentFile.name}: ${mappingErr.message || mappingErr}`
+              );
+            }
+          });
           const onProgress = () => {
             this.win.webContents.send('torrent-progress', {
               phase: 'progress',
@@ -78,6 +401,8 @@ class DownloadManager {
               numPeers: torrent.numPeers || 0
             });
           };
+          torrent.on('wire', markActivity);
+          torrent.on('download', markActivity);
           const progressInterval = setInterval(onProgress, 500);
           torrent.on('error', (err) => {
             clearInterval(progressInterval);
@@ -132,6 +457,7 @@ class DownloadManager {
     this.downloadInfoService = downloadInfoService;
     this.downloadService = downloadService;
     this.isCancelled = false;
+    this.torrentClient = 'aria2';
   }
 
   /**
@@ -168,10 +494,12 @@ class DownloadManager {
    * @param {boolean} isThrottlingEnabled Whether download throttling is enabled.
    * @param {number} throttleSpeed The speed for download throttling.
    * @param {string} throttleUnit The unit for download throttling speed (e.g., 'kb', 'mb').
+   * @param {'webtorrent'|'aria2'|'qbittorrent'} [torrentClient='aria2'] Preferred torrent engine.
    * @returns {Promise<{success: boolean}>} A promise that resolves with a success status.
    */
-  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit) {
+  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient = 'aria2') {
     this.reset();
+    this.torrentClient = torrentClient;
 
     const downloadStartTime = performance.now();
     let allSkippedFiles = [];
@@ -321,19 +649,20 @@ class DownloadManager {
       await this.extractFiles(filesForExtraction, targetDir, createSubfolder, maintainFolderStructure);
     }
 
+    if (!wasCancelled && downloadedFiles.length > 0) {
+      try {
+        await this._downloadFromTorrentFiles(downloadedFiles, targetDir);
+      } catch (e) {
+        this.downloadConsole.logError(`Torrent payload stage failed: ${e.message || e}`);
+      }
+    }
+
     this.win.webContents.send('download-complete', {
       message: "",
       skippedFiles: allSkippedFiles,
       wasCancelled: wasCancelled,
       partialFile: partialFile
     });
-
-    if (!wasCancelled && downloadedFiles.length > 0) {
-      // Do not block normal completion UI on torrent peer availability.
-      this._downloadFromTorrentFiles(downloadedFiles, targetDir).catch((e) => {
-        this.downloadConsole.logError(`Torrent payload stage failed: ${e.message || e}`);
-      });
-    }
 
     return { success: true };
   }

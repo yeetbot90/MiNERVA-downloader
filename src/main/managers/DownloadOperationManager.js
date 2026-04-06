@@ -79,11 +79,12 @@ class DownloadOperationManager {
    * @param {boolean} isThrottlingEnabled Whether download throttling is enabled.
    * @param {number} throttleSpeed The speed for download throttling.
    * @param {string} throttleUnit The unit for download throttling speed (e.g., 'kb', 'mb').
+   * @param {'webtorrent'|'aria2'|'qbittorrent'} torrentClient Preferred torrent engine.
    * @returns {Promise<object>} A promise that resolves with an object containing the download status or an error object.
    */
-  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit) {
+  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient) {
     try {
-      return await this.downloadManager.startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit);
+      return await this.downloadManager.startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient);
     } catch (e) {
       return { error: e && e.message ? e.message : String(e) };
     }
