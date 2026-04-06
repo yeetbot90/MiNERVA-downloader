@@ -43,6 +43,15 @@ class DownloadManager {
       const destination = path.join(targetDir, path.parse(torrentFile.name).name);
       await fs.promises.mkdir(destination, { recursive: true });
       this.downloadConsole.log(`Starting torrent payload download for ${torrentFile.name}`);
+      this.win.webContents.send('torrent-progress', {
+        phase: 'start',
+        name: torrentFile.name,
+        current: 0,
+        total: 0,
+        progress: 0,
+        downloadSpeed: 0,
+        numPeers: 0
+      });
 
       const client = new WebTorrent();
       try {
@@ -58,19 +67,53 @@ class DownloadManager {
           };
 
           const torrent = client.add(torrentFile.path, { path: destination });
+          const onProgress = () => {
+            this.win.webContents.send('torrent-progress', {
+              phase: 'progress',
+              name: torrentFile.name,
+              current: torrent.downloaded || 0,
+              total: torrent.length || 0,
+              progress: torrent.progress || 0,
+              downloadSpeed: torrent.downloadSpeed || 0,
+              numPeers: torrent.numPeers || 0
+            });
+          };
+          const progressInterval = setInterval(onProgress, 500);
           torrent.on('error', (err) => {
+            clearInterval(progressInterval);
             cleanup();
             reject(err);
           });
           torrent.on('warning', () => {});
           torrent.on('done', () => {
+            clearInterval(progressInterval);
+            onProgress();
             cleanup();
             resolve();
           });
         });
         this.downloadConsole.log(`Torrent payload download complete: ${torrentFile.name}`);
+        this.win.webContents.send('torrent-progress', {
+          phase: 'done',
+          name: torrentFile.name,
+          current: 0,
+          total: 0,
+          progress: 1,
+          downloadSpeed: 0,
+          numPeers: 0
+        });
       } catch (e) {
         this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${e.message || e}`);
+        this.win.webContents.send('torrent-progress', {
+          phase: 'error',
+          name: torrentFile.name,
+          current: 0,
+          total: 0,
+          progress: 0,
+          downloadSpeed: 0,
+          numPeers: 0,
+          error: e.message || String(e)
+        });
         try { client.destroy(); } catch (destroyErr) {}
       }
     }
@@ -197,6 +240,15 @@ class DownloadManager {
       } else {
         const remainingSize = totalSize - skippedSize;
         this.downloadConsole.logTotalDownloadSize(formatBytes(remainingSize));
+        const estimatedTorrentPayloadBytes = filesToDownload.reduce((sum, file) => {
+          const payload = Number(file?.payloadSize || 0);
+          return sum + (Number.isFinite(payload) && payload > 0 ? payload : 0);
+        }, 0);
+        if (estimatedTorrentPayloadBytes > 0) {
+          this.downloadConsole.log(
+            `Estimated torrent payload size: ${formatBytes(estimatedTorrentPayloadBytes)} (downloaded after .torrent metadata).`
+          );
+        }
         this.win.webContents.send('download-overall-progress', { current: skippedSize, total: totalSize, skippedSize: skippedSize, eta: calculateEta(skippedSize, totalSize, downloadStartTime), isFinal: false });
 
         const totalFilesOverall = files.length;

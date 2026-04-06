@@ -86,6 +86,10 @@ export default class DownloadUI {
       fileProgressLabel: document.querySelector('label[for="file-progress"]'),
       fileProgressName: document.getElementById('file-progress-name'),
       fileProgressSize: document.getElementById('file-progress-size'),
+      torrentProgressBar: document.getElementById('torrent-progress-bar'),
+      torrentProgress: document.getElementById('torrent-progress'),
+      torrentProgressName: document.getElementById('torrent-progress-name'),
+      torrentProgressText: document.getElementById('torrent-progress-text'),
       downloadDirBtn: document.getElementById('download-dir-btn'),
       extractionProgressBar: document.getElementById('extraction-progress-bar'),
       extractionProgress: document.getElementById('extraction-progress'),
@@ -597,6 +601,10 @@ export default class DownloadUI {
     elements.overallExtractionProgressTime.textContent = "Estimated Time Remaining: --";
     elements.extractionProgressName.textContent = "";
     elements.extractionProgressText.textContent = "";
+    if (elements.torrentProgressBar) elements.torrentProgressBar.classList.add('hidden');
+    if (elements.torrentProgress) elements.torrentProgress.value = 0;
+    if (elements.torrentProgressName) elements.torrentProgressName.textContent = "";
+    if (elements.torrentProgressText) elements.torrentProgressText.textContent = "";
 
     elements.scanProgressBar.classList.remove('hidden');
     elements.downloadProgressBars.classList.remove('hidden');
@@ -633,6 +641,7 @@ export default class DownloadUI {
       elements.downloadRestartBtn.classList.add('hidden');
       elements.extractionProgressBar.classList.add('hidden');
       elements.overallExtractionProgressBar.classList.add('hidden');
+      if (elements.torrentProgressBar) elements.torrentProgressBar.classList.add('hidden');
       elements.fileProgress.classList.add('hidden');
       elements.fileProgressName.classList.add('hidden');
       elements.fileProgressSize.classList.add('hidden');
@@ -643,6 +652,9 @@ export default class DownloadUI {
       elements.overallExtractionProgressTime.textContent = "Estimated Time Remaining: --";
       elements.extractionProgressName.textContent = "";
       elements.extractionProgressText.textContent = "";
+      if (elements.torrentProgress) elements.torrentProgress.value = 0;
+      if (elements.torrentProgressName) elements.torrentProgressName.textContent = "";
+      if (elements.torrentProgressText) elements.torrentProgressText.textContent = "";
     });
     document.addEventListener('click', (e) => {
       const elements = this._getElements();
@@ -874,6 +886,46 @@ export default class DownloadUI {
         const filePercentFixed = filePercent.toFixed(0);
         elements.extractionProgressName.textContent = `${data.filename} (${data.overallExtractedEntryCount}/${data.totalEntriesOverall})`;
         elements.extractionProgressText.textContent = `${await formatBytes(data.fileProgress)} / ${await formatBytes(data.fileTotal)} (${filePercentFixed}%)`;
+      }
+    });
+
+    window.electronAPI.onTorrentProgress(async data => {
+      const elements = this._getElements();
+      if (!elements.torrentProgressBar || !elements.torrentProgress) return;
+
+      if (data.phase === 'start') {
+        elements.torrentProgressBar.classList.remove('hidden');
+        elements.torrentProgress.value = 0;
+        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressText.textContent = 'Connecting to peers...';
+        return;
+      }
+
+      if (data.phase === 'progress') {
+        elements.torrentProgressBar.classList.remove('hidden');
+        const percent = (typeof data.progress === 'number' ? data.progress : 0) * 100;
+        elements.torrentProgress.value = Math.max(0, Math.min(100, percent));
+        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        const speed = await formatBytes(data.downloadSpeed || 0);
+        const current = await formatBytes(data.current || 0);
+        const total = await formatBytes(data.total || 0);
+        elements.torrentProgressText.textContent = `${current} / ${total} (${percent.toFixed(1)}%) | ${speed}/s | peers: ${data.numPeers || 0}`;
+        return;
+      }
+
+      if (data.phase === 'done') {
+        elements.torrentProgressBar.classList.remove('hidden');
+        elements.torrentProgress.value = 100;
+        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressText.textContent = 'Completed';
+        return;
+      }
+
+      if (data.phase === 'error') {
+        elements.torrentProgressBar.classList.remove('hidden');
+        elements.torrentProgress.value = 0;
+        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressText.textContent = `Failed: ${data.error || 'Unknown error'}`;
       }
     });
   }

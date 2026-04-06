@@ -46,18 +46,21 @@ class DownloadInfoService {
     if (!slug) return null;
     try {
       const db = await this._getHashesDb(session, parsed.origin);
-      const stmt = db.prepare('SELECT torrents FROM files WHERE full_path = ? LIMIT 1');
+      const stmt = db.prepare('SELECT torrents, size FROM files WHERE full_path = ? LIMIT 1');
       stmt.bind([slug]);
       let torrentPath = null;
+      let payloadSize = 0;
       if (stmt.step()) {
         const row = stmt.getAsObject();
         torrentPath = typeof row.torrents === 'string' ? row.torrents : null;
+        const parsedSize = parseInt(String(row.size ?? '0'), 10);
+        payloadSize = Number.isFinite(parsedSize) && parsedSize > 0 ? parsedSize : 0;
       }
       stmt.free();
       if (!torrentPath) return null;
       const href = new URL(`/assets/${torrentPath.replace(/^\/+/, '')}`, parsed.origin).href;
       const name = decodeURIComponent(torrentPath.split('/').filter(Boolean).pop() || '');
-      return { href, name: name || null };
+      return { href, name: name || null, payloadSize };
     } catch {
       return null;
     }
@@ -235,6 +238,9 @@ class DownloadInfoService {
           if (resolved.name) {
             filename = resolved.name;
             fileInfo.name = resolved.name;
+          }
+          if (resolved.payloadSize > 0) {
+            fileInfo.payloadSize = resolved.payloadSize;
           }
         }
       }

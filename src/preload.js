@@ -147,6 +147,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   onExtractionProgress: (callback) => ipcRenderer.on('extraction-progress', (event, data) => callback(data)),
   /**
+   * Registers a callback for torrent payload progress updates.
+   * @param {function} callback - The function to call with torrent progress data.
+   */
+  onTorrentProgress: (callback) => ipcRenderer.on('torrent-progress', (event, data) => callback(data)),
+  /**
    * Registers a callback to hide the download UI components.
    * @param {function} callback - The function to call.
    */
