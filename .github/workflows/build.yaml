@@ -1,10 +1,50 @@
-name: Build and push artifacts
+name: Release Build (Windows Portable + Linux AppImage)
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
   push:
     tags:
-      - '*'
+      - 'v*'
+
+permissions:
+  contents: write
+
 jobs:
+  bump_version:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Bump version and create tag
+        id: version
+        run: |
+          new_tag=$(npm version ${{ inputs.bump }} -m "chore(release): %s")
+          echo "tag=$new_tag" >> "$GITHUB_OUTPUT"
+          git push --follow-tags
+
   build:
+    needs: [bump_version]
+    if: github.event_name == 'push' || needs.bump_version.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -17,11 +57,19 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump_version.outputs.tag || github.ref_name }}
       - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - name: Build executable
         run: |
-          npm install
-          npm run build:all
+          npm install --no-audit --no-fund
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            npm run build:win:portable
+          else
+            npm run build:linux
+          fi
           exec_name=$(find "${{ env.RELEASE_DIR }}" -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.dmg' \) -exec basename {} \;)
           echo "ARTIFACT_NAME=$exec_name" >> "$GITHUB_ENV"
           echo "FILENAME=${{ env.RELEASE_DIR }}/$exec_name" >> "$GITHUB_ENV"
@@ -31,3 +79,21 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.FILENAME }}
           compression-level: 9
+
+  publish_release:
+    needs: [build, bump_version]
+    if: github.event_name == 'push' || needs.bump_version.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.bump_version.outputs.tag || github.ref_name }}
+        run: |
+          gh release view "$TAG_NAME" >/dev/null 2>&1 || gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Automated release for $TAG_NAME"
+          gh release upload "$TAG_NAME" dist-artifacts/* --clobber
