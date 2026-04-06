@@ -12,18 +12,18 @@ Download the latest release here:
 
 *You will need to clone the repository and build the application yourself using the instructions in this README if you want to run the application on a Mac.*
 
-Please consider donating to support my work and Myrient's service.
+Please consider donating to support my work and MiNERVA's service.
 
 <a href="https://ko-fi.com/bradrevans"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Me-orange?style=flat-square"></a>
 
-<a href="https://myrient.erista.me/donate/"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Myrient-red?style=flat-square"></a>
+<a href="https://minerva-archive.org/"><img alt="Static Badge" src="https://img.shields.io/badge/Support-MiNERVA-blue?style=flat-square"></a>
 
 ***
 
 ## What the Application Does
 
 The MiNERVA Downloader provides a seamless process for creating curated game collections:
-1.  **Browse and Select:** Allows users to easily browse and search the entire Myrient catalog of archives (e.g., No-Intro, MAME) and drill down into specific systems or categories.
+1.  **Browse and Select:** Allows users to easily browse and search the entire MiNERVA catalog of archives (e.g., No-Intro, MAME) and drill down into specific systems or categories.
     * **Download Anywhere:** Download from the directory of your choice using torrent, recursively finding all files beneath your chosen directory.
     * **See Files:** See and search the files at your currently selected directory so you know what you will be downloading when you click "Download from Here".
 2.  **Optionally Filter and Curate:** Presents a powerful wizard to filter thousands of files down to a specific list based on custom rules:
@@ -180,4 +180,4 @@ The workflow will:
 Please make sure to follow all legal and ethical guidelines when using this program.
 Downloading and using copyrighted material without proper authorization may violate copyright laws in your country.
 
-This is a web-scraping tool. Please be respectful of [Myrient's](https://myrient.erista.me/) bandwidth and service. This tool would not exist if it wasn't for them.
+This is a web-scraping tool. Please be respectful of [MiNERVA's](https://minerva-archive.org/) bandwidth and service. This tool would not exist if it wasn't for them.

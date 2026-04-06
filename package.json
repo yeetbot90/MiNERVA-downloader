@@ -1,7 +1,7 @@
 {
-  "name": "myrient-downloader",
+  "name": "minerva-downloader",
   "version": "4.0.3",
-  "description": "A desktop app to browse, filter, and download from Myrient.",
+  "description": "A desktop app to browse, filter, and download from MiNERVA.",
   "main": "src/main/main.js",
   "type": "module",
   "scripts": {
@@ -36,8 +36,8 @@
     "tailwindcss": "^3.4.3"
   },
   "build": {
-    "appId": "com.bradrevans.myrientdownloader",
-    "productName": "Myrient Downloader",
+    "appId": "org.minerva.downloader",
+    "productName": "MiNERVA Downloader",
     "files": [
       "**/*"
     ],
