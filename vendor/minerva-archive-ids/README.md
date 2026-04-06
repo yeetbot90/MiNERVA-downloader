@@ -1,16 +1,33 @@
-# Vendored Minerva archive IDs
+# Minerva ID List
 
-This directory is intended to mirror:
-- https://github.com/yeetbot90/Minerva-archive-ids
+This repository is a list of each of the Minerva archives' file ID's per torrent. As many have probably found, the GUI's from torrenting clients are combersome given the amount of files within each of the dumps. This repo is a way to solve this by providing the id's of each file within each seperate dump that Minerva has saved from the Myrient archive. 
 
-The app first attempts to read local `markdown-files/*-ids.md` mappings from this folder,
-then falls back to remote raw GitHub URLs if local maps are missing.
+The way that I have found to grab single files is to use Aria2 (https://aria2.github.io/)
 
-To sync from upstream, run:
+## 1. Go and download the torrent from Minerva for the desired dump
 
-```bash
-npm run sync:minerva-ids
+https://cdn.minerva-archive.org/torrents/
+
+If you want to download all of the torrents...
+
+```
+for i in $(curl -s https://cdn.minerva-archive.org/torrents/ | grep 'href' | awk -F "href=" '{print $2}' | awk -F '>' '{print $1}' | tr -d '"'); do wget -nc https://cdn.minerva-archive.org/torrents/$i; sleep 3 ; done
 ```
 
-If your environment blocks GitHub access, run the command on a machine with network access
-and commit the resulting `vendor/minerva-archive-ids/markdown-files/` contents.
+## 2. Go to the markdown file here
+
+Grab the ID(s) for the specific file(s) you want.
+
+## 3. Use aria2c to download the game from the torrent
+
+```
+$ aria2c --select-file=<id> --seed-time=0 <torrent_file> -d <directory_to_save_file_to>
+```
+
+Example (multiple files):
+
+```
+$ aria2c --select-file=1,2,3 --seed-time=0 <torrent_file> -d <directory_to_save_file_to>
+```
+
+Note: if you want to seed the files you downloaded remove the `--seed-time=0` from your command.
