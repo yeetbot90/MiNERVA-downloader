@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsManager.setupSettings();
 
   /**
-   * Loads directories from the Myrient service and populates the view.
+   * Loads directories from the MiNERVA service and populates the view.
    * @param {string} [url] - The URL to load directories from. If not provided, loads from the base URL.
    */
   async function loadDirectory(url) {
@@ -201,7 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       let modalConfirmClass = 'btn-success';
 
       if (stateService.get('consecutiveLoadFailures') >= 2) {
-        modalMessage += '\n\nIf this error persists, there might be an issue with the directory\'s content or Myrient\'s service availability. Consider trying a different directory or checking your network connection.';
+        modalMessage += '\n\nIf this error persists, there might be an issue with the directory\'s content or MiNERVA service availability. Consider trying a different directory or checking your network connection.';
         modalCancelText = 'Close App';
       }
 
@@ -289,7 +289,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('github-link').addEventListener('click', () => {
-    shellService.openExternal('https://github.com/bradrevans/myrient-downloader');
+    shellService.openExternal('https://github.com/yeetbot90/MiNERVA-downloader');
   });
 
   document.getElementById('kofi-link').addEventListener('click', () => {
@@ -342,7 +342,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('donate-link').addEventListener('click', () => {
-    shellService.openExternal('https://myrient.erista.me/donate/');
+    shellService.openExternal('https://minerva-archive.org/');
   });
 
   /**
@@ -392,4 +392,3 @@ document.addEventListener('DOMContentLoaded', async () => {
   setAppVersion();
   checkForUpdatesOnStartup();
 });
-

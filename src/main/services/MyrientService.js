@@ -98,7 +98,24 @@ class MyrientService {
     this.scrapeClient = axios.create({
       httpsAgent: this.httpAgent,
       timeout: 15000,
-      headers: { 'User-Agent': HTTP_USER_AGENT },
+      headers: {
+        'User-Agent': HTTP_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
+    });
+    this.scrapeClient.interceptors.request.use((config) => {
+      try {
+        const requestUrl = new URL(config.url);
+        config.headers = {
+          ...(config.headers || {}),
+          'Referer': `${requestUrl.origin}/`,
+          'Origin': requestUrl.origin,
+        };
+      } catch (e) {}
+      return config;
     });
   }
 
