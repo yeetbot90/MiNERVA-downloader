@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "tailwindcss -i ./src/renderer/styles/input.css -o ./src/renderer/styles/style.css && electron .",
+    "sync:minerva-ids": "bash ./tools/sync-minerva-ids.sh",
     "build:all": "npm run build:css && electron-builder --publish never",
     "build:win": "npm run build:css && electron-builder --win --publish never",
     "build:win:portable": "npm run build:css && electron-builder --win portable --publish never",

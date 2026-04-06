@@ -7,6 +7,8 @@ import axios from 'axios';
 import { formatBytes, parseSize } from '../../shared/utils/formatters.js';
 import { calculateEta } from '../../shared/utils/time.js';
 import { URL } from 'url';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import { MINERVA_IDS_RAW_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
@@ -16,6 +18,28 @@ import { MINERVA_IDS_RAW_BASE_URL } from '../../shared/constants/appConstants.js
  */
 class DownloadManager {
   static TORRENT_PAYLOAD_STALL_TIMEOUT_MS = 120000;
+  static LOCAL_MINERVA_IDS_DIR = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../vendor/minerva-archive-ids/markdown-files'
+  );
+
+  _normalizeForMatch(value) {
+    let normalized = String(value || '')
+      .replace(/^.*[\\/]/, '')
+      .replace(/\[[^\]]*]/g, ' ')
+      .replace(/\([^)]*?\b(rev|beta|proto|sample|demo|alt)\b[^)]*\)/gi, ' ')
+      .toLowerCase()
+      .trim();
+
+    // Some entries use chained extensions (e.g. .zip.001), while others have uncommon ROM formats.
+    // Strip up to 3 generic extension segments from the end to improve matching without hard-coding every format.
+    for (let i = 0; i < 3; i += 1) {
+      const next = normalized.replace(/\.(?:[a-z0-9]{1,8}|part\d{1,3}|r\d{2,3}|z\d{2,3}|zip\.\d{3})$/i, '');
+      if (next === normalized) break;
+      normalized = next.trim();
+    }
+
+    return normalized
 
   _normalizeForMatch(value) {
     return String(value || '')
@@ -28,20 +52,38 @@ class DownloadManager {
 
   async _loadIdsMarkdownForTorrent(torrentName) {
     const fileName = `${torrentName}-ids.md`;
-    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
-    const url = `${MINERVA_IDS_RAW_BASE_URL}${encodedFileName}`;
-    const response = await axios.get(url, {
-      timeout: 15000,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'text/plain,*/*;q=0.8',
-      },
-    });
-    if (response.status < 200 || response.status >= 400 || typeof response.data !== 'string') {
-      return null;
+    const localPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    try {
+      const localContents = await fs.promises.readFile(localPath, 'utf8');
+      if (typeof localContents === 'string' && localContents.trim()) {
+        return localContents;
+      }
+    } catch {
+      // Local vendored map not found; continue with remote fallback.
     }
-    return response.data;
+
+    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const baseCandidates = [
+      MINERVA_IDS_RAW_BASE_URL,
+      'https://raw.githubusercontent.com/Caprico1/Minerva-archive-ids/main/markdown-files/',
+    ];
+
+    for (const baseUrl of baseCandidates) {
+      const url = `${baseUrl}${encodedFileName}`;
+      const response = await axios.get(url, {
+        timeout: 15000,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'text/plain,*/*;q=0.8',
+        },
+      });
+      if (response.status >= 200 && response.status < 400 && typeof response.data === 'string') {
+        return response.data;
+      }
+    }
+
+    return null;
   }
 
   _parseMarkdownIdRows(markdownText) {
@@ -50,6 +92,7 @@ class DownloadManager {
     for (const line of markdownText.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed || /^#/.test(trimmed)) continue;
+      if (/^\|\s*:?-{2,}:?\s*\|/.test(trimmed)) continue; // markdown table separator row
 
       // table style: | 123 | Game Name |
       let match = trimmed.match(/^\|\s*(\d+)\s*\|\s*(.+?)\s*\|?$/);
@@ -57,11 +100,34 @@ class DownloadManager {
         // list style: 123 - Game Name
         match = trimmed.match(/^(\d+)\s*[-:|]\s*(.+)$/);
       }
+      if (!match) {
+        // ordered list style: 123. Game Name
+        match = trimmed.match(/^(\d+)\.\s+(.+)$/);
+      }
+      if (!match) {
+        // bullet + id style: - 123 - Game Name
+        match = trimmed.match(/^[-*]\s*(\d+)\s*[-:|]\s*(.+)$/);
+      }
+      if (!match) {
+        // csv style: 123,Game Name
+        match = trimmed.match(/^(\d+)\s*,\s*(.+)$/);
+      }
+      if (!match) {
+        // markdown link style: [123](link) - Game Name OR [123](link)|Game Name
+        match = trimmed.match(/^\[\s*(\d+)\s*]\([^)]*\)\s*[-:|]\s*(.+)$/);
+      }
       if (!match) continue;
 
       const id = parseInt(match[1], 10);
       if (!Number.isFinite(id) || id <= 0) continue;
-      const fileName = match[2].trim().replace(/^`|`$/g, '');
+      const fileName = match[2]
+        .trim()
+        .replace(/^`|`$/g, '')
+        .replace(/^\[|\]$/g, '')
+        .replace(/^"+|"+$/g, '')
+        .replace(/^\*+|\*+$/g, '')
+        .replace(/^_+|_+$/g, '')
+        .trim();
       if (!fileName) continue;
       results.push({ id, fileName });
     }
@@ -84,6 +150,118 @@ class DownloadManager {
     return parsedRows
       .filter((row) => this._normalizeForMatch(path.basename(row.fileName)).includes(target))
       .map((row) => row.id);
+  }
+
+  _applyFileSelection(torrent, selectedFileIds) {
+    const selectedIds = new Set(selectedFileIds.filter((id) => Number.isFinite(id) && id > 0));
+    if (selectedIds.size === 0) return 0;
+
+    if (typeof torrent.deselect === 'function' && Number.isFinite(torrent.pieces?.length) && torrent.pieces.length > 0) {
+      torrent.deselect(0, torrent.pieces.length - 1, false);
+    }
+
+    let selectedCount = 0;
+    torrent.files.forEach((f, idx) => {
+      const id = idx + 1;
+      if (selectedIds.has(id)) {
+        f.select();
+        selectedCount += 1;
+      } else {
+        f.deselect();
+      }
+    });
+    return selectedCount;
+  }
+
+  _buildAria2Args(torrentPath, destination, selectedIds = []) {
+    const args = [
+      '--seed-time=0',
+      '--file-allocation=none',
+      '--check-integrity=false',
+      '--bt-save-metadata=true',
+      '--follow-torrent=mem',
+      '--summary-interval=1',
+      '--console-log-level=warn',
+      '--download-result=default',
+      `--dir=${destination}`,
+    ];
+
+    if (selectedIds.length > 0) {
+      args.push(`--select-file=${selectedIds.join(',')}`);
+    }
+
+    args.push(torrentPath);
+    return args;
+  }
+
+  async _runAria2ForTorrent(torrentFile, destination) {
+    const requestedGameName = torrentFile.requestedGameName;
+    const ids = requestedGameName
+      ? await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName)
+      : [];
+    if (requestedGameName && ids.length === 0) {
+      return { attempted: false, reason: 'no-id-match' };
+    }
+
+    const args = this._buildAria2Args(torrentFile.path, destination, ids);
+    await new Promise((resolve, reject) => {
+      const proc = spawn('aria2c', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      proc.stdout.on('data', (chunk) => {
+        const text = String(chunk || '').trim();
+        if (text) this.downloadConsole.log(`[aria2] ${text}`);
+      });
+      proc.stderr.on('data', (chunk) => {
+        const text = String(chunk || '').trim();
+        if (text) {
+          stderr += `${text}\n`;
+          this.downloadConsole.log(`[aria2] ${text}`);
+        }
+      });
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0) return resolve();
+        reject(new Error(`aria2c exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+      });
+    });
+
+    return { attempted: true, selectedIds: ids };
+  }
+
+  async _tryAria2First(torrentFile, destination) {
+    try {
+      const outcome = await this._runAria2ForTorrent(torrentFile, destination);
+      if (outcome.attempted) {
+        const selectedInfo = outcome.selectedIds?.length
+          ? `${outcome.selectedIds.length} selected file id(s)`
+          : 'all files selected';
+        this.downloadConsole.log(`aria2c payload download complete for ${torrentFile.name} (${selectedInfo}).`);
+      } else if (outcome.reason === 'no-id-match') {
+        this.downloadConsole.log(`aria2c skipped for ${torrentFile.name}: no Minerva ID match for requested game.`);
+      }
+      return outcome;
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/ENOENT|not found/i.test(message)) {
+        this.downloadConsole.log('aria2c not found on PATH, falling back to built-in WebTorrent.');
+        return { attempted: false, reason: 'aria2-not-installed' };
+      }
+      this.downloadConsole.logError(`aria2c failed for ${torrentFile.name}: ${message}. Falling back to WebTorrent.`);
+      return { attempted: false, reason: 'aria2-failed' };
+    }
+  }
+
+  _getPreferredTorrentClient() {
+    const preferred = String(this.torrentClient || 'aria2').toLowerCase();
+    if (['webtorrent', 'aria2', 'qbittorrent'].includes(preferred)) return preferred;
+    return 'aria2';
+  }
+
+  async _tryQbittorrentFirst(torrentFile) {
+    this.downloadConsole.log(
+      `qBittorrent engine selected for ${torrentFile.name}, but WebUI integration is not configured in this build. Falling back to WebTorrent.`
+    );
+    return { attempted: false, reason: 'qbittorrent-not-configured' };
   }
 
   /**
@@ -124,6 +302,26 @@ class DownloadManager {
         numPeers: 0
       });
 
+      const preferredEngine = this._getPreferredTorrentClient();
+      const externalOutcome = preferredEngine === 'aria2'
+        ? await this._tryAria2First(torrentFile, destination)
+        : preferredEngine === 'qbittorrent'
+          ? await this._tryQbittorrentFirst(torrentFile, destination)
+          : { attempted: false, reason: 'webtorrent-selected' };
+
+      if (externalOutcome.attempted) {
+        this.win.webContents.send('torrent-progress', {
+          phase: 'done',
+          name: torrentFile.name,
+          current: 0,
+          total: 0,
+          progress: 1,
+          downloadSpeed: 0,
+          numPeers: 0
+        });
+        continue;
+      }
+
       const client = new WebTorrent();
       try {
         await new Promise((resolve, reject) => {
@@ -155,18 +353,10 @@ class DownloadManager {
 
             try {
               const ids = await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName);
-              const idSet = new Set(ids);
-              if (idSet.size > 0) {
-                torrent.files.forEach((f, idx) => {
-                  const id = idx + 1;
-                  if (idSet.has(id)) {
-                    f.select();
-                  } else {
-                    f.deselect();
-                  }
-                });
+              const selectedByMapCount = this._applyFileSelection(torrent, ids);
+              if (selectedByMapCount > 0) {
                 this.downloadConsole.log(
-                  `Using Minerva ID mapping for ${torrentFile.name}: selected ${idSet.size} file(s) for "${requestedGameName}".`
+                  `Using Minerva ID mapping for ${torrentFile.name}: selected ${selectedByMapCount} file(s) for "${requestedGameName}".`
                 );
                 return;
               }
@@ -176,19 +366,16 @@ class DownloadManager {
                 .map((f, idx) => ({ file: f, id: idx + 1 }))
                 .filter(({ file }) => this._normalizeForMatch(path.basename(file.path)).includes(normalizedRequested));
               if (matchedByName.length > 0) {
-                const selectedIds = new Set(matchedByName.map(({ id }) => id));
-                torrent.files.forEach((f, idx) => {
-                  const id = idx + 1;
-                  if (selectedIds.has(id)) {
-                    f.select();
-                  } else {
-                    f.deselect();
-                  }
-                });
+                const selectedCount = this._applyFileSelection(torrent, matchedByName.map(({ id }) => id));
                 this.downloadConsole.log(
-                  `Using filename match fallback for ${torrentFile.name}: selected ${selectedIds.size} file(s) for "${requestedGameName}".`
+                  `Using filename match fallback for ${torrentFile.name}: selected ${selectedCount} file(s) for "${requestedGameName}".`
                 );
+                return;
               }
+
+              this.downloadConsole.log(
+                `No Minerva ID/filename match found for "${requestedGameName}" in ${torrentFile.name}; downloading full torrent payload.`
+              );
             } catch (mappingErr) {
               this.downloadConsole.logError(
                 `Failed to apply Minerva ID mapping for ${torrentFile.name}: ${mappingErr.message || mappingErr}`
@@ -262,6 +449,7 @@ class DownloadManager {
     this.downloadInfoService = downloadInfoService;
     this.downloadService = downloadService;
     this.isCancelled = false;
+    this.torrentClient = 'aria2';
   }
 
   /**
@@ -298,10 +486,12 @@ class DownloadManager {
    * @param {boolean} isThrottlingEnabled Whether download throttling is enabled.
    * @param {number} throttleSpeed The speed for download throttling.
    * @param {string} throttleUnit The unit for download throttling speed (e.g., 'kb', 'mb').
+   * @param {'webtorrent'|'aria2'|'qbittorrent'} [torrentClient='aria2'] Preferred torrent engine.
    * @returns {Promise<{success: boolean}>} A promise that resolves with a success status.
    */
-  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit) {
+  async startDownload(baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient = 'aria2') {
     this.reset();
+    this.torrentClient = torrentClient;
 
     const downloadStartTime = performance.now();
     let allSkippedFiles = [];

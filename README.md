@@ -175,6 +175,22 @@ The workflow will:
 - build a portable Windows `.exe` and Linux `.AppImage`,
 - upload both to a GitHub Release for that tag.
 
+### Minerva markdown ID maps (vendored + sync)
+
+To support single-game torrent selection, this repo now supports a **vendored local copy** of `yeetbot90/Minerva-archive-ids` under:
+
+- `vendor/minerva-archive-ids/markdown-files/`
+
+The downloader checks local markdown ID maps first, then falls back to remote raw GitHub URLs.
+
+To sync/update the local copy:
+
+```bash
+npm run sync:minerva-ids
+```
+
+If your CI/container cannot reach GitHub, run the sync command on a machine with network access and commit the updated `vendor/minerva-archive-ids/markdown-files/` files.
+
 ## Disclaimer
 
 Please make sure to follow all legal and ethical guidelines when using this program.

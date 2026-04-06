@@ -6,7 +6,7 @@ import { Throttle } from '@kldzj/stream-throttle';
 import initSqlJs from 'sql.js';
 import { createRequire } from 'module';
 import FileSystemService from './FileSystemService.js';
-import { HTTP_USER_AGENT, MINERVA_TORRENT_CDN_BASE_URL } from '../../shared/constants/appConstants.js';
+import { HTTP_CLI_USER_AGENT, HTTP_USER_AGENT, MINERVA_TORRENT_CDN_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
  * Service responsible for handling the actual downloading of files,
@@ -164,6 +164,31 @@ class DownloadService {
       return `${msg} (status ${status}${statusText ? ` ${statusText}` : ''}, url ${fileUrl})`;
     }
     return `${msg} (url ${fileUrl})`;
+  }
+
+  async _getDownloadStreamWithFallbackUserAgent(session, fileUrl, baseHeaders) {
+    try {
+      return await session.get(fileUrl, {
+        responseType: 'stream',
+        timeout: 30000,
+        signal: this.abortController.signal,
+        headers: baseHeaders
+      });
+    } catch (error) {
+      if (error?.response?.status === 403) {
+        return session.get(fileUrl, {
+          responseType: 'stream',
+          timeout: 30000,
+          signal: this.abortController.signal,
+          headers: {
+            ...baseHeaders,
+            'User-Agent': HTTP_CLI_USER_AGENT,
+            'Accept': '*/*',
+          }
+        });
+      }
+      throw error;
+    }
   }
 
   _getExpectedFinalSize(fileSize, response) {
@@ -366,10 +391,10 @@ class DownloadService {
         }
       }
 
-      const headers = {
-        'User-Agent': HTTP_USER_AGENT,
-        'Accept': 'application/octet-stream,*/*;q=0.8',
-      };
+        const headers = {
+          'User-Agent': HTTP_USER_AGENT,
+          'Accept': 'application/octet-stream,*/*;q=0.8',
+        };
 
       if (fileDownloaded > 0) {
         headers['Range'] = `bytes=${fileDownloaded}-`;
@@ -377,12 +402,7 @@ class DownloadService {
       }
 
       try {
-        const response = await session.get(fileUrl, {
-          responseType: 'stream',
-          timeout: 30000,
-          signal: this.abortController.signal,
-          headers: headers
-        });
+          const response = await this._getDownloadStreamWithFallbackUserAgent(session, fileUrl, headers);
 
         if (response.status !== 200 && response.status !== 206) {
           throw new Error(`Bad response status ${response.status} for ${filename}`);

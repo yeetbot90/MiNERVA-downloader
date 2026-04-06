@@ -156,6 +156,17 @@
         <button id="zoom-reset-btn"
           class="text-white hover:text-accent-500 px-2 py-1 rounded app-non-draggable-area bg-transparent border-none text-lg">&#x21BA;</button>
       </div>
+
+      <h6 class="text-white text-base font-bold mt-4 mb-2">Torrent Engine</h6>
+      <select id="torrent-client-select"
+        class="w-full text-white bg-neutral-800 border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500">
+        <option value="aria2">aria2 (Recommended for Minerva IDs)</option>
+        <option value="webtorrent">WebTorrent (Built-in)</option>
+        <option value="qbittorrent">qBittorrent (Experimental)</option>
+      </select>
+      <p class="text-neutral-400 text-xs mt-2">
+        Use aria2 for Minerva markdown ID-based file selection. qBittorrent requires local WebUI setup.
+      </p>
     </div>
     <div class="p-4 border-t border-neutral-700">
       <h6 class="text-white text-base font-bold mb-2">About</h6>
