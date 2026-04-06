@@ -9,7 +9,7 @@ export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
  * @type {string}
  */
 export const HTTP_USER_AGENT =
-  'MiNERVA-Downloader/4.0.2 (+https://minerva-archive.org; desktop browse/download)';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 /**
  * Defines the possible directory structures for downloaded files.
  * @readonly
