@@ -13,6 +13,8 @@ import { URL } from 'url';
  * @class
  */
 class DownloadManager {
+  static TORRENT_PAYLOAD_TIMEOUT_MS = 120000;
+
   /**
    * Downloads payload files for downloaded .torrent manifests.
    * Falls back silently if the optional webtorrent dependency is unavailable.
@@ -45,7 +47,13 @@ class DownloadManager {
       const client = new WebTorrent();
       try {
         await new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            try { client.destroy(); } catch (e) {}
+            reject(new Error(`Timed out waiting for torrent peers after ${Math.round(DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS / 1000)}s`));
+          }, DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS);
+
           const cleanup = () => {
+            clearTimeout(timeoutId);
             try { client.destroy(); } catch (e) {}
           };
 
@@ -261,16 +269,19 @@ class DownloadManager {
       await this.extractFiles(filesForExtraction, targetDir, createSubfolder, maintainFolderStructure);
     }
 
-    if (!wasCancelled && downloadedFiles.length > 0) {
-      await this._downloadFromTorrentFiles(downloadedFiles, targetDir);
-    }
-
     this.win.webContents.send('download-complete', {
       message: "",
       skippedFiles: allSkippedFiles,
       wasCancelled: wasCancelled,
       partialFile: partialFile
     });
+
+    if (!wasCancelled && downloadedFiles.length > 0) {
+      // Do not block normal completion UI on torrent peer availability.
+      this._downloadFromTorrentFiles(downloadedFiles, targetDir).catch((e) => {
+        this.downloadConsole.logError(`Torrent payload stage failed: ${e.message || e}`);
+      });
+    }
 
     return { success: true };
   }

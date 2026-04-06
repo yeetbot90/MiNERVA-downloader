@@ -3,6 +3,8 @@ import path from 'path';
 import https from 'https';
 import { URL } from 'url';
 import axios from 'axios';
+import initSqlJs from 'sql.js';
+import { createRequire } from 'module';
 import MyrientService from './MyrientService.js';
 import FileSystemService from './FileSystemService.js';
 import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
@@ -13,6 +15,54 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @class
  */
 class DownloadInfoService {
+  _isRomMetadataUrl(fileUrl) {
+    try {
+      const u = new URL(fileUrl);
+      return u.pathname.replace(/\/$/, '') === '/rom' && !!u.searchParams.get('name');
+    } catch {
+      return false;
+    }
+  }
+
+  async _getHashesDb(session, origin) {
+    if (!this.hashDbByOrigin.has(origin)) {
+      const loadPromise = (async () => {
+        const response = await session.get(`${origin}/assets/hashes.db`, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+        });
+        const dbBytes = new Uint8Array(response.data);
+        const SQL = await this.sqlInitPromise;
+        return new SQL.Database(dbBytes);
+      })();
+      this.hashDbByOrigin.set(origin, loadPromise);
+    }
+    return this.hashDbByOrigin.get(origin);
+  }
+
+  async _resolveRomMetadataUrl(session, fileUrl) {
+    const parsed = new URL(fileUrl);
+    const slug = parsed.searchParams.get('name');
+    if (!slug) return null;
+    try {
+      const db = await this._getHashesDb(session, parsed.origin);
+      const stmt = db.prepare('SELECT torrents FROM files WHERE full_path = ? LIMIT 1');
+      stmt.bind([slug]);
+      let torrentPath = null;
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        torrentPath = typeof row.torrents === 'string' ? row.torrents : null;
+      }
+      stmt.free();
+      if (!torrentPath) return null;
+      const href = new URL(`/assets/${torrentPath.replace(/^\/+/, '')}`, parsed.origin).href;
+      const name = decodeURIComponent(torrentPath.split('/').filter(Boolean).pop() || '');
+      return { href, name: name || null };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Best-effort remote size fetch. Falls back from HEAD to ranged GET.
    * @param {import('axios').AxiosInstance} session
@@ -61,6 +111,14 @@ class DownloadInfoService {
     this.httpAgent = new https.Agent({ keepAlive: true });
     this.abortController = new AbortController();
     this.myrientService = myrientService;
+    const require = createRequire(import.meta.url);
+    this.sqlInitPromise = initSqlJs({
+      locateFile: (file) => {
+        if (file === 'sql-wasm.wasm') return require.resolve('sql.js/dist/sql-wasm.wasm');
+        return file;
+      }
+    });
+    this.hashDbByOrigin = new Map();
   }
 
   /**
@@ -166,8 +224,20 @@ class DownloadInfoService {
       if (this.isCancelled()) throw new Error("CANCELLED_SCAN");
 
       const fileInfo = allFilesToProcess[i];
-      const filename = fileInfo.name;
-      const fileUrl = fileInfo.href;
+      let filename = fileInfo.name;
+      let fileUrl = fileInfo.href;
+
+      if (this._isRomMetadataUrl(fileUrl)) {
+        const resolved = await this._resolveRomMetadataUrl(session, fileUrl);
+        if (resolved?.href) {
+          fileUrl = resolved.href;
+          fileInfo.href = resolved.href;
+          if (resolved.name) {
+            filename = resolved.name;
+            fileInfo.name = resolved.name;
+          }
+        }
+      }
 
       const { targetPath, extractPath } = FileSystemService.calculatePaths(targetDir, fileInfo, { createSubfolder, maintainFolderStructure, baseUrl });
       const partPath = `${targetPath}.part`;
