@@ -189,6 +189,7 @@ class DownloadManager {
       '--bt-save-metadata=true',
       '--follow-torrent=mem',
       '--summary-interval=1',
+      '--enable-color=false',
       '--console-log-level=warn',
       '--download-result=default',
       `--dir=${destination}`,
@@ -200,6 +201,50 @@ class DownloadManager {
 
     args.push(torrentPath);
     return args;
+  }
+
+  _parseAria2Bytes(text) {
+    if (!text) return 0;
+    const match = String(text).trim().match(/^([\d.]+)\s*([kmgt]?i?b)$/i);
+    if (!match) return 0;
+
+    const value = Number.parseFloat(match[1]);
+    if (!Number.isFinite(value) || value < 0) return 0;
+
+    const unit = match[2].toLowerCase();
+    const multipliers = {
+      b: 1,
+      kb: 1000,
+      mb: 1000 ** 2,
+      gb: 1000 ** 3,
+      tb: 1000 ** 4,
+      kib: 1024,
+      mib: 1024 ** 2,
+      gib: 1024 ** 3,
+      tib: 1024 ** 4,
+    };
+    return Math.round(value * (multipliers[unit] || 1));
+  }
+
+  _parseAria2ProgressLine(line) {
+    if (!line || !line.includes('DL:')) return null;
+
+    const percentMatch = line.match(/\(([\d.]+)%\)/);
+    const transferMatch = line.match(/([\d.]+\s*[kmgt]?i?b)\s*\/\s*([\d.]+\s*[kmgt]?i?b)/i);
+    const speedMatch = line.match(/DL:([\d.]+\s*[kmgt]?i?b)(?:\/s)?/i);
+    const peersMatch = line.match(/(?:CN|SEED|LEECH):\s*(\d+)/i) || line.match(/CN:\s*(\d+)/i);
+
+    const current = transferMatch ? this._parseAria2Bytes(transferMatch[1]) : 0;
+    const total = transferMatch ? this._parseAria2Bytes(transferMatch[2]) : 0;
+    const parsedPercent = percentMatch ? Number.parseFloat(percentMatch[1]) : Number.NaN;
+    const progress = Number.isFinite(parsedPercent)
+      ? Math.max(0, Math.min(1, parsedPercent / 100))
+      : (total > 0 ? current / total : 0);
+    const downloadSpeed = speedMatch ? this._parseAria2Bytes(speedMatch[1]) : 0;
+    const numPeers = peersMatch ? Number.parseInt(peersMatch[1], 10) : 0;
+
+    if (!Number.isFinite(progress) || progress < 0) return null;
+    return { current, total, progress, downloadSpeed, numPeers };
   }
 
   async _runAria2ForTorrent(torrentFile, destination) {
@@ -215,9 +260,31 @@ class DownloadManager {
     await new Promise((resolve, reject) => {
       const proc = spawn('aria2c', args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = '';
+      let stdoutBuffer = '';
       proc.stdout.on('data', (chunk) => {
-        const text = String(chunk || '').trim();
-        if (text) this.downloadConsole.log(`[aria2] ${text}`);
+        const text = String(chunk || '');
+        if (!text) return;
+        stdoutBuffer += text;
+
+        let newlineIndex = stdoutBuffer.indexOf('\n');
+        while (newlineIndex !== -1) {
+          const rawLine = stdoutBuffer.slice(0, newlineIndex);
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          const line = rawLine.trim();
+          if (line) {
+            this.downloadConsole.log(`[aria2] ${line}`);
+            const parsed = this._parseAria2ProgressLine(line);
+            if (parsed) {
+              this.win.webContents.send('torrent-progress', {
+                phase: 'progress',
+                engine: 'aria2',
+                name: torrentFile.name,
+                ...parsed,
+              });
+            }
+          }
+          newlineIndex = stdoutBuffer.indexOf('\n');
+        }
       });
       proc.stderr.on('data', (chunk) => {
         const text = String(chunk || '').trim();
@@ -228,6 +295,19 @@ class DownloadManager {
       });
       proc.on('error', (err) => reject(err));
       proc.on('close', (code) => {
+        const trailing = stdoutBuffer.trim();
+        if (trailing) {
+          this.downloadConsole.log(`[aria2] ${trailing}`);
+          const parsed = this._parseAria2ProgressLine(trailing);
+          if (parsed) {
+            this.win.webContents.send('torrent-progress', {
+              phase: 'progress',
+              engine: 'aria2',
+              name: torrentFile.name,
+              ...parsed,
+            });
+          }
+        }
         if (code === 0) return resolve();
         reject(new Error(`aria2c exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
       });
@@ -300,8 +380,10 @@ class DownloadManager {
       const destination = path.join(targetDir, path.parse(torrentFile.name).name);
       await fs.promises.mkdir(destination, { recursive: true });
       this.downloadConsole.log(`Starting torrent payload download for ${torrentFile.name}`);
+      const preferredEngine = this._getPreferredTorrentClient();
       this.win.webContents.send('torrent-progress', {
         phase: 'start',
+        engine: preferredEngine,
         name: torrentFile.name,
         current: 0,
         total: 0,
@@ -310,7 +392,6 @@ class DownloadManager {
         numPeers: 0
       });
 
-      const preferredEngine = this._getPreferredTorrentClient();
       const externalOutcome = preferredEngine === 'aria2'
         ? await this._tryAria2First(torrentFile, destination)
         : preferredEngine === 'qbittorrent'
@@ -320,6 +401,7 @@ class DownloadManager {
       if (externalOutcome.attempted) {
         this.win.webContents.send('torrent-progress', {
           phase: 'done',
+          engine: preferredEngine,
           name: torrentFile.name,
           current: 0,
           total: 0,
@@ -393,6 +475,7 @@ class DownloadManager {
           const onProgress = () => {
             this.win.webContents.send('torrent-progress', {
               phase: 'progress',
+              engine: 'webtorrent',
               name: torrentFile.name,
               current: torrent.downloaded || 0,
               total: torrent.length || 0,
@@ -420,6 +503,7 @@ class DownloadManager {
         this.downloadConsole.log(`Torrent payload download complete: ${torrentFile.name}`);
         this.win.webContents.send('torrent-progress', {
           phase: 'done',
+          engine: 'webtorrent',
           name: torrentFile.name,
           current: 0,
           total: 0,
@@ -431,6 +515,7 @@ class DownloadManager {
         this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${e.message || e}`);
         this.win.webContents.send('torrent-progress', {
           phase: 'error',
+          engine: 'webtorrent',
           name: torrentFile.name,
           current: 0,
           total: 0,
