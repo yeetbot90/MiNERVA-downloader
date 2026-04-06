@@ -13,7 +13,7 @@ import { URL } from 'url';
  * @class
  */
 class DownloadManager {
-  static TORRENT_PAYLOAD_TIMEOUT_MS = 120000;
+  static TORRENT_PAYLOAD_STALL_TIMEOUT_MS = 120000;
 
   /**
    * Downloads payload files for downloaded .torrent manifests.
@@ -56,13 +56,24 @@ class DownloadManager {
       const client = new WebTorrent();
       try {
         await new Promise((resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-            try { client.destroy(); } catch (e) {}
-            reject(new Error(`Timed out waiting for torrent peers after ${Math.round(DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS / 1000)}s`));
-          }, DownloadManager.TORRENT_PAYLOAD_TIMEOUT_MS);
+          let lastActivityAt = Date.now();
+          let stalledWithoutPeers = true;
+          const markActivity = () => {
+            lastActivityAt = Date.now();
+            stalledWithoutPeers = false;
+          };
+          const stallCheckInterval = setInterval(() => {
+            const stalledFor = Date.now() - lastActivityAt;
+            if (stalledWithoutPeers && stalledFor >= DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS) {
+              try { client.destroy(); } catch (e) {}
+              reject(new Error(
+                `Timed out waiting for torrent transfer activity after ${Math.round(DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS / 1000)}s`
+              ));
+            }
+          }, 1000);
 
           const cleanup = () => {
-            clearTimeout(timeoutId);
+            clearInterval(stallCheckInterval);
             try { client.destroy(); } catch (e) {}
           };
 
@@ -78,6 +89,8 @@ class DownloadManager {
               numPeers: torrent.numPeers || 0
             });
           };
+          torrent.on('wire', markActivity);
+          torrent.on('download', markActivity);
           const progressInterval = setInterval(onProgress, 500);
           torrent.on('error', (err) => {
             clearInterval(progressInterval);
@@ -321,19 +334,20 @@ class DownloadManager {
       await this.extractFiles(filesForExtraction, targetDir, createSubfolder, maintainFolderStructure);
     }
 
+    if (!wasCancelled && downloadedFiles.length > 0) {
+      try {
+        await this._downloadFromTorrentFiles(downloadedFiles, targetDir);
+      } catch (e) {
+        this.downloadConsole.logError(`Torrent payload stage failed: ${e.message || e}`);
+      }
+    }
+
     this.win.webContents.send('download-complete', {
       message: "",
       skippedFiles: allSkippedFiles,
       wasCancelled: wasCancelled,
       partialFile: partialFile
     });
-
-    if (!wasCancelled && downloadedFiles.length > 0) {
-      // Do not block normal completion UI on torrent peer availability.
-      this._downloadFromTorrentFiles(downloadedFiles, targetDir).catch((e) => {
-        this.downloadConsole.logError(`Torrent payload stage failed: ${e.message || e}`);
-      });
-    }
 
     return { success: true };
   }

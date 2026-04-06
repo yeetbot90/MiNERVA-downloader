@@ -72,7 +72,40 @@ class DownloadService {
         name: suggestedName || null,
         payloadSize,
       };
-    } catch (e) {
+    } catch (e) {}
+
+    // Fallback for schema/content drift: try to resolve from /rom metadata response directly.
+    try {
+      const response = await session.get(fileUrl, {
+        responseType: 'text',
+        timeout: 30000,
+        headers: {
+          'Accept': 'application/json,text/plain,text/html,*/*',
+        },
+      });
+      const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      const extractedTorrentPath = (() => {
+        const jsonTorrentsMatch = body.match(/"torrents"\s*:\s*"([^"]+\.torrent[^"]*)"/i);
+        if (jsonTorrentsMatch?.[1]) return jsonTorrentsMatch[1];
+
+        const assetsPathMatch = body.match(/\/assets\/[^"'`\s<>]+\.torrent\b/i);
+        if (assetsPathMatch?.[0]) return assetsPathMatch[0];
+
+        return null;
+      })();
+      if (!extractedTorrentPath) return null;
+
+      const normalizedPath = extractedTorrentPath.replace(/^https?:\/\/[^/]+/i, '');
+      const resolved = new URL(normalizedPath.startsWith('/assets/')
+        ? normalizedPath
+        : `/assets/${normalizedPath.replace(/^\/+/, '')}`, origin).href;
+      const suggestedName = decodeURIComponent(normalizedPath.split('/').filter(Boolean).pop() || '');
+      return {
+        href: resolved,
+        name: suggestedName || null,
+        payloadSize: 0,
+      };
+    } catch (fallbackErr) {
       return null;
     }
   }
