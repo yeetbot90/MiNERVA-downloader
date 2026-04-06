@@ -1,6 +1,7 @@
 import appService from '../services/AppService.js';
 import windowService from '../services/WindowService.js';
 import shellService from '../services/ShellService.js';
+import stateService from '../StateService.js';
 
 /**
  * Manages the settings panel, including opening/closing and handling user interactions with settings options.
@@ -30,6 +31,10 @@ class SettingsManager {
   setupSettings() {
     this.setupEventListeners();
     this.uiManager.addInfoIconToElement('zoom-heading', 'zoomHeading');
+    const torrentClientSelect = document.getElementById('torrent-client-select');
+    if (torrentClientSelect) {
+      torrentClientSelect.value = stateService.get('torrentClient') || 'aria2';
+    }
   }
 
   /**
@@ -69,6 +74,16 @@ class SettingsManager {
       windowService.zoomReset();
       setTimeout(() => this.updateZoomDisplay(), 100);
     });
+
+    const torrentClientSelect = document.getElementById('torrent-client-select');
+    if (torrentClientSelect) {
+      torrentClientSelect.addEventListener('change', (e) => {
+        const value = e.target.value;
+        if (['webtorrent', 'aria2', 'qbittorrent'].includes(value)) {
+          stateService.set('torrentClient', value);
+        }
+      });
+    }
 
     document.getElementById('check-for-updates-btn').addEventListener('click', async () => {
       const updateStatusElement = document.getElementById('update-status');

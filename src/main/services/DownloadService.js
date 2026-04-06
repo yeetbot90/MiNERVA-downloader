@@ -6,7 +6,7 @@ import { Throttle } from '@kldzj/stream-throttle';
 import initSqlJs from 'sql.js';
 import { createRequire } from 'module';
 import FileSystemService from './FileSystemService.js';
-import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
+import { HTTP_CLI_USER_AGENT, HTTP_USER_AGENT, MINERVA_TORRENT_CDN_BASE_URL } from '../../shared/constants/appConstants.js';
 
 /**
  * Service responsible for handling the actual downloading of files,
@@ -19,6 +19,50 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @property {ConsoleService} downloadConsole - An instance of ConsoleService for logging download-related messages.
  */
 class DownloadService {
+  _getTorrentCandidates(origin, torrentPath) {
+    if (!torrentPath || typeof torrentPath !== 'string') return [];
+    const normalized = torrentPath.trim();
+    if (!normalized) return [];
+
+    const candidates = [];
+    const pushCandidate = (url) => {
+      if (!url || candidates.includes(url)) return;
+      candidates.push(url);
+    };
+
+    if (/^https?:\/\//i.test(normalized)) {
+      pushCandidate(normalized);
+      return candidates;
+    }
+
+    if (normalized.startsWith('/assets/')) {
+      pushCandidate(new URL(normalized, origin).href);
+    }
+
+    const cleaned = normalized.replace(/^\/+/, '');
+    pushCandidate(new URL(`/assets/${cleaned}`, origin).href);
+    pushCandidate(new URL(cleaned, MINERVA_TORRENT_CDN_BASE_URL).href);
+    const justName = cleaned.split('/').filter(Boolean).pop();
+    if (justName) {
+      pushCandidate(new URL(justName, MINERVA_TORRENT_CDN_BASE_URL).href);
+    }
+
+    return candidates;
+  }
+
+  async _pickReachableTorrentUrl(session, candidates) {
+    for (const candidate of candidates) {
+      try {
+        const response = await session.head(candidate, {
+          timeout: 8000,
+          validateStatus: () => true,
+        });
+        if (response.status >= 200 && response.status < 400) return candidate;
+      } catch (e) {}
+    }
+    return candidates[0] || null;
+  }
+
   _isRomMetadataUrl(fileUrl) {
     try {
       const u = new URL(fileUrl);
@@ -65,14 +109,48 @@ class DownloadService {
       stmt.free();
       if (!torrentPath) return null;
 
-      const resolved = new URL(`/assets/${torrentPath.replace(/^\/+/, '')}`, origin).href;
-      const suggestedName = decodeURIComponent(torrentPath.split('/').filter(Boolean).pop() || '');
+      const candidates = this._getTorrentCandidates(origin, torrentPath);
+      const resolved = await this._pickReachableTorrentUrl(session, candidates);
+      if (!resolved) return null;
+      const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
       return {
         href: resolved,
         name: suggestedName || null,
         payloadSize,
       };
-    } catch (e) {
+    } catch (e) {}
+
+    // Fallback for schema/content drift: try to resolve from /rom metadata response directly.
+    try {
+      const response = await session.get(fileUrl, {
+        responseType: 'text',
+        timeout: 30000,
+        headers: {
+          'Accept': 'application/json,text/plain,text/html,*/*',
+        },
+      });
+      const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      const extractedTorrentPath = (() => {
+        const jsonTorrentsMatch = body.match(/"torrents"\s*:\s*"([^"]+\.torrent[^"]*)"/i);
+        if (jsonTorrentsMatch?.[1]) return jsonTorrentsMatch[1];
+
+        const assetsPathMatch = body.match(/\/assets\/[^"'`\s<>]+\.torrent\b/i);
+        if (assetsPathMatch?.[0]) return assetsPathMatch[0];
+
+        return null;
+      })();
+      if (!extractedTorrentPath) return null;
+
+      const candidates = this._getTorrentCandidates(origin, extractedTorrentPath);
+      const resolved = await this._pickReachableTorrentUrl(session, candidates);
+      if (!resolved) return null;
+      const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
+      return {
+        href: resolved,
+        name: suggestedName || null,
+        payloadSize: 0,
+      };
+    } catch (fallbackErr) {
       return null;
     }
   }
@@ -86,6 +164,31 @@ class DownloadService {
       return `${msg} (status ${status}${statusText ? ` ${statusText}` : ''}, url ${fileUrl})`;
     }
     return `${msg} (url ${fileUrl})`;
+  }
+
+  async _getDownloadStreamWithFallbackUserAgent(session, fileUrl, baseHeaders) {
+    try {
+      return await session.get(fileUrl, {
+        responseType: 'stream',
+        timeout: 30000,
+        signal: this.abortController.signal,
+        headers: baseHeaders
+      });
+    } catch (error) {
+      if (error?.response?.status === 403) {
+        return session.get(fileUrl, {
+          responseType: 'stream',
+          timeout: 30000,
+          signal: this.abortController.signal,
+          headers: {
+            ...baseHeaders,
+            'User-Agent': HTTP_CLI_USER_AGENT,
+            'Accept': '*/*',
+          }
+        });
+      }
+      throw error;
+    }
   }
 
   _getExpectedFinalSize(fileSize, response) {
@@ -207,7 +310,22 @@ class DownloadService {
       timeout: 15000,
       headers: {
         'User-Agent': HTTP_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
       },
+    });
+    session.interceptors.request.use((config) => {
+      try {
+        const requestUrl = new URL(config.url);
+        config.headers = {
+          ...(config.headers || {}),
+          'Referer': `${requestUrl.origin}/`,
+          'Origin': requestUrl.origin,
+        };
+      } catch (e) {}
+      return config;
     });
 
     let totalDownloaded = initialDownloadedSize;
@@ -228,6 +346,9 @@ class DownloadService {
       let fileUrl = fileInfo.href;
 
       if (this._isRomMetadataUrl(fileUrl)) {
+        if (!fileInfo.requestedGameName) {
+          fileInfo.requestedGameName = filename;
+        }
         const resolved = await this._resolveRomMetadataUrl(session, fileUrl);
         if (resolved?.href) {
           fileUrl = resolved.href;
@@ -270,9 +391,10 @@ class DownloadService {
         }
       }
 
-      const headers = {
-        'User-Agent': HTTP_USER_AGENT,
-      };
+        const headers = {
+          'User-Agent': HTTP_USER_AGENT,
+          'Accept': 'application/octet-stream,*/*;q=0.8',
+        };
 
       if (fileDownloaded > 0) {
         headers['Range'] = `bytes=${fileDownloaded}-`;
@@ -280,12 +402,7 @@ class DownloadService {
       }
 
       try {
-        const response = await session.get(fileUrl, {
-          responseType: 'stream',
-          timeout: 30000,
-          signal: this.abortController.signal,
-          headers: headers
-        });
+          const response = await this._getDownloadStreamWithFallbackUserAgent(session, fileUrl, headers);
 
         if (response.status !== 200 && response.status !== 206) {
           throw new Error(`Bad response status ${response.status} for ${filename}`);
