@@ -892,12 +892,15 @@ export default class DownloadUI {
     window.electronAPI.onTorrentProgress(async data => {
       const elements = this._getElements();
       if (!elements.torrentProgressBar || !elements.torrentProgress) return;
+      const engineLabel = data.engine ? `[${String(data.engine)}] ` : '';
 
       if (data.phase === 'start') {
         elements.torrentProgressBar.classList.remove('hidden');
         elements.torrentProgress.value = 0;
-        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
-        elements.torrentProgressText.textContent = 'Connecting to peers...';
+        elements.torrentProgressName.textContent = `${engineLabel}${data.name || 'Torrent payload'}`;
+        elements.torrentProgressText.textContent = data.engine === 'aria2'
+          ? 'Starting aria2 transfer...'
+          : 'Connecting to peers...';
         return;
       }
 
@@ -905,7 +908,7 @@ export default class DownloadUI {
         elements.torrentProgressBar.classList.remove('hidden');
         const percent = (typeof data.progress === 'number' ? data.progress : 0) * 100;
         elements.torrentProgress.value = Math.max(0, Math.min(100, percent));
-        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressName.textContent = `${engineLabel}${data.name || 'Torrent payload'}`;
         const speed = await formatBytes(data.downloadSpeed || 0);
         const current = await formatBytes(data.current || 0);
         const total = await formatBytes(data.total || 0);
@@ -916,7 +919,7 @@ export default class DownloadUI {
       if (data.phase === 'done') {
         elements.torrentProgressBar.classList.remove('hidden');
         elements.torrentProgress.value = 100;
-        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressName.textContent = `${engineLabel}${data.name || 'Torrent payload'}`;
         elements.torrentProgressText.textContent = 'Completed';
         return;
       }
@@ -924,7 +927,7 @@ export default class DownloadUI {
       if (data.phase === 'error') {
         elements.torrentProgressBar.classList.remove('hidden');
         elements.torrentProgress.value = 0;
-        elements.torrentProgressName.textContent = data.name || 'Torrent payload';
+        elements.torrentProgressName.textContent = `${engineLabel}${data.name || 'Torrent payload'}`;
         elements.torrentProgressText.textContent = `Failed: ${data.error || 'Unknown error'}`;
       }
     });
