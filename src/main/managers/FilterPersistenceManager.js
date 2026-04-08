@@ -124,7 +124,7 @@ class FilterPersistenceManager {
   async exportFilters() {
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Export Filters',
-      defaultPath: 'myrient-downloader-filters.json',
+      defaultPath: 'minerva-downloader-filters.json',
       filters: [{ name: 'JSON', extensions: ['json'] }]
     });
 
@@ -149,7 +149,7 @@ class FilterPersistenceManager {
   async exportSelectedFilters(selectedFilters) {
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Export Selected Filters',
-      defaultPath: 'myrient-downloader-filters.json',
+      defaultPath: 'minerva-downloader-filters.json',
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
 

@@ -4,7 +4,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 import FileParserService from './FileParserService.js';
-import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
+import { HTTP_CLI_USER_AGENT, HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
 
 const CONCURRENCY_LIMIT = 5;
 
@@ -23,7 +23,7 @@ class MyrientService {
   _isDirectDownloadLink(resolved) {
     if (!resolved || resolved.pathname.endsWith('/')) return false;
     const lowerPath = resolved.pathname.toLowerCase();
-    const fileLikeExtRegex = /\.(torrent|zip|7z|rar|iso|chd|cue|bin|img|gz|bz2|xz|zst)$/i;
+    const fileLikeExtRegex = /\.(torrent|zip|7z|rar|iso|chd|cue|bin|img|gz|bz2|xz|zst|rom|nes|sfc|smc|gb|gbc|gba|n64|z64|v64|nds|3ds|cia|xci|nsp|wbfs|gcz|rvz|a26|gen|md|sms|gg|pce|ws|wsc|ngp|ngc|cso|pbp|elf|exe|apk|jar|msu|d64|g64|tap|t64|prg|adf|adz|atr|xfd|m3u|ccd|sub|mdf|nrg|toast|wad)$/i;
     return lowerPath.includes('/assets/') || fileLikeExtRegex.test(lowerPath);
   }
 
@@ -98,7 +98,24 @@ class MyrientService {
     this.scrapeClient = axios.create({
       httpsAgent: this.httpAgent,
       timeout: 15000,
-      headers: { 'User-Agent': HTTP_USER_AGENT },
+      headers: {
+        'User-Agent': HTTP_USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
+    });
+    this.scrapeClient.interceptors.request.use((config) => {
+      try {
+        const requestUrl = new URL(config.url);
+        config.headers = {
+          ...(config.headers || {}),
+          'Referer': `${requestUrl.origin}/`,
+          'Origin': requestUrl.origin,
+        };
+      } catch (e) {}
+      return config;
     });
   }
 
@@ -117,6 +134,19 @@ class MyrientService {
       const response = await this.scrapeClient.get(url);
       return response.data;
     } catch (err) {
+      if (err?.response?.status === 403) {
+        try {
+          const retryResponse = await this.scrapeClient.get(url, {
+            headers: {
+              'User-Agent': HTTP_CLI_USER_AGENT,
+              'Accept': '*/*',
+            },
+          });
+          return retryResponse.data;
+        } catch (retryErr) {
+          throw new Error(`Failed to fetch directory. Please check your connection and try again. Original error: ${retryErr.message}`);
+        }
+      }
       throw new Error(`Failed to fetch directory. Please check your connection and try again. Original error: ${err.message}`);
     }
   }

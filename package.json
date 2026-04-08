@@ -1,13 +1,16 @@
 {
-  "name": "myrient-downloader",
+  "name": "minerva-downloader",
   "version": "4.0.3",
-  "description": "A desktop app to browse, filter, and download from Myrient.",
+  "description": "A desktop app to browse, filter, and download from MiNERVA.",
   "main": "src/main/main.js",
   "type": "module",
   "scripts": {
     "start": "tailwindcss -i ./src/renderer/styles/input.css -o ./src/renderer/styles/style.css && electron .",
+    "sync:minerva-ids": "bash ./tools/sync-minerva-ids.sh",
     "build:all": "npm run build:css && electron-builder --publish never",
     "build:win": "npm run build:css && electron-builder --win --publish never",
+    "build:win:portable": "npm run build:css && electron-builder --win portable --publish never",
+    "build:win:folder": "npm run build:css && electron-builder --win --dir --publish never",
     "build:mac": "npm run build:css && electron-builder --mac --publish never",
     "build:linux": "npm run build:css && electron-builder --linux --publish never",
     "build:css": "tailwindcss -i ./src/renderer/styles/input.css -o ./src/renderer/styles/style.css --minify"
@@ -34,11 +37,10 @@
     "tailwindcss": "^3.4.3"
   },
   "build": {
-    "appId": "com.bradrevans.myrientdownloader",
-    "productName": "Myrient Downloader",
+    "appId": "org.minerva.downloader",
+    "productName": "MiNERVA Downloader",
     "files": [
-      "**/*",
-      "!node_modules/*"
+      "**/*"
     ],
     "directories": {
       "output": "release"

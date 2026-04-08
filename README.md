@@ -12,18 +12,18 @@ Download the latest release here:
 
 *You will need to clone the repository and build the application yourself using the instructions in this README if you want to run the application on a Mac.*
 
-Please consider donating to support my work and Myrient's service.
+Please consider donating to support my work and MiNERVA's service.
 
 <a href="https://ko-fi.com/bradrevans"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Me-orange?style=flat-square"></a>
 
-<a href="https://myrient.erista.me/donate/"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Myrient-red?style=flat-square"></a>
+<a href="https://minerva-archive.org/"><img alt="Static Badge" src="https://img.shields.io/badge/Support-MiNERVA-blue?style=flat-square"></a>
 
 ***
 
 ## What the Application Does
 
 The MiNERVA Downloader provides a seamless process for creating curated game collections:
-1.  **Browse and Select:** Allows users to easily browse and search the entire Myrient catalog of archives (e.g., No-Intro, MAME) and drill down into specific systems or categories.
+1.  **Browse and Select:** Allows users to easily browse and search the entire MiNERVA catalog of archives (e.g., No-Intro, MAME) and drill down into specific systems or categories.
     * **Download Anywhere:** Download from the directory of your choice using torrent, recursively finding all files beneath your chosen directory.
     * **See Files:** See and search the files at your currently selected directory so you know what you will be downloading when you click "Download from Here".
 2.  **Optionally Filter and Curate:** Presents a powerful wizard to filter thousands of files down to a specific list based on custom rules:
@@ -112,7 +112,7 @@ The MiNERVA Downloader provides a seamless process for creating curated game col
 2.  **Install Dependencies:** Open a terminal in the project's root folder (where `package.json` is) and run:
 
     ```bash
-    npm install
+    npm install --no-audit --no-fund
     ```
 
 3.  **Run the App (Development Mode):**
@@ -132,13 +132,68 @@ The project is configured with `electron-builder` to generate ready-to-run execu
 | Target OS | Command | Output |
 | :--- | :--- | :--- |
 | **Windows** | `npm run build:win` | Portable `.exe` |
+| **Windows (Portable Only)** | `npm run build:win:portable` | Portable `.exe` |
+| **Windows (Folder Build)** | `npm run build:win:folder` | `win-unpacked/` folder |
 | **macOS** | `npm run build:mac` | `.dmg` |
 | **Linux** | `npm run build:linux` | `.AppImage` |
 | **Current OS (All)** | `npm run build:all` | Target for the current OS |
+
+### Portable build quick-start
+
+1. Install dependencies:
+   ```bash
+   npm ci
+   ```
+2. Build a **portable Windows `.exe`**:
+   ```bash
+   npm run build:win:portable
+   ```
+3. Build a **Linux `.AppImage`**:
+   ```bash
+   npm run build:linux
+   ```
+4. Optional: build a **Windows folder/unpacked app**:
+   ```bash
+   npm run build:win:folder
+   ```
+
+Build outputs are written to the `release/` folder.
+
+> Note: `electron-builder` works best when building on the same OS as the target artifact (Linux for AppImage, Windows for portable `.exe`).
+> On Windows, `electron-builder` may also create a `win-unpacked/` directory during the build. For a true portable build, share/use the generated portable `.exe` artifact in `release/` (you do not need to ship `win-unpacked` with it).
+
+### Automated GitHub release builds (version bump + artifacts)
+
+Use the **Release Build (Windows Portable + Linux AppImage)** GitHub Actions workflow:
+
+1. Open **Actions** in GitHub.
+2. Run **Release Build (Windows Portable + Linux AppImage)** manually.
+3. Choose bump type: `patch`, `minor`, or `major`.
+
+The workflow will:
+- bump `package.json` version and create/push a git tag (`vX.Y.Z`),
+- build a portable Windows `.exe` and Linux `.AppImage`,
+- upload both to a GitHub Release for that tag.
+
+### Minerva markdown ID maps (vendored + sync)
+
+To support single-game torrent selection, this repo now supports a **vendored local copy** of `yeetbot90/Minerva-archive-ids` under:
+
+- `vendor/minerva-archive-ids/markdown-files/`
+
+The downloader checks local markdown ID maps first, then falls back to remote raw GitHub URLs.
+
+To sync/update the local copy:
+
+```bash
+npm run sync:minerva-ids
+```
+
+If your CI/container cannot reach GitHub, run the sync command on a machine with network access and commit the updated `vendor/minerva-archive-ids/markdown-files/` files.
 
 ## Disclaimer
 
 Please make sure to follow all legal and ethical guidelines when using this program.
 Downloading and using copyrighted material without proper authorization may violate copyright laws in your country.
 
-This is a web-scraping tool. Please be respectful of [Myrient's](https://myrient.erista.me/) bandwidth and service. This tool would not exist if it wasn't for them.
+This is a web-scraping tool. Please be respectful of [MiNERVA's](https://minerva-archive.org/) bandwidth and service. This tool would not exist if it wasn't for them.
