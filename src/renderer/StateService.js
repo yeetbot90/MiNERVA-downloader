@@ -104,7 +104,7 @@ class StateService {
     const storedTorrentClient = localStorage.getItem('torrentClient');
     if (storedTorrentClient !== null) {
       const parsedTorrentClient = JSON.parse(storedTorrentClient);
-      if (['webtorrent', 'aria2', 'qbittorrent'].includes(parsedTorrentClient)) {
+      if (parsedTorrentClient === 'aria2') {
         this.state.torrentClient = parsedTorrentClient;
       }
     }

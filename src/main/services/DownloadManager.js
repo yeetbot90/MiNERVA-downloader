@@ -47,36 +47,83 @@ class DownloadManager {
       .trim();
   }
 
+  _normalizeTorrentMapName(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.torrent(?:-ids\.md)?$/i, '')
+      .replace(/[^a-z0-9]+/g, '')
+      .trim();
+  }
+
+  async _findLocalIdsMapPath(fileName) {
+    const directPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    try {
+      await fs.promises.access(directPath, fs.constants.R_OK);
+      return directPath;
+    } catch {
+      // continue to fuzzy lookup
+    }
+
+    let dirEntries = [];
+    try {
+      dirEntries = await fs.promises.readdir(DownloadManager.LOCAL_MINERVA_IDS_DIR, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+
+    const target = this._normalizeTorrentMapName(fileName);
+    const mdNames = dirEntries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('-ids.md'))
+      .map((entry) => entry.name);
+    if (mdNames.length === 0) return null;
+
+    const exact = mdNames.find((name) => this._normalizeTorrentMapName(name) === target);
+    if (exact) return path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, exact);
+
+    const loose = mdNames.find((name) => {
+      const normalized = this._normalizeTorrentMapName(name);
+      return normalized.includes(target) || target.includes(normalized);
+    });
+    return loose ? path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, loose) : null;
+  }
+
   async _loadIdsMarkdownForTorrent(torrentName) {
     const fileName = `${torrentName}-ids.md`;
-    const localPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    const localPath = await this._findLocalIdsMapPath(fileName);
     try {
-      const localContents = await fs.promises.readFile(localPath, 'utf8');
-      if (typeof localContents === 'string' && localContents.trim()) {
-        return localContents;
+      if (localPath) {
+        const localContents = await fs.promises.readFile(localPath, 'utf8');
+        if (typeof localContents === 'string' && localContents.trim()) {
+          return localContents;
+        }
       }
     } catch {
       // Local vendored map not found; continue with remote fallback.
     }
 
-    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const encodedCandidates = [
+      encodeURIComponent(fileName).replace(/%2F/g, '/'),
+      fileName,
+    ];
     const baseCandidates = [
-      MINERVA_IDS_RAW_BASE_URL,
       'https://raw.githubusercontent.com/Caprico1/Minerva-archive-ids/main/markdown-files/',
+      MINERVA_IDS_RAW_BASE_URL,
     ];
 
     for (const baseUrl of baseCandidates) {
-      const url = `${baseUrl}${encodedFileName}`;
-      const response = await axios.get(url, {
-        timeout: 15000,
-        validateStatus: () => true,
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': 'text/plain,*/*;q=0.8',
-        },
-      });
-      if (response.status >= 200 && response.status < 400 && typeof response.data === 'string') {
-        return response.data;
+      for (const encodedFileName of encodedCandidates) {
+        const url = `${baseUrl}${encodedFileName}`;
+        const response = await axios.get(url, {
+          timeout: 15000,
+          validateStatus: () => true,
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'text/plain,*/*;q=0.8',
+          },
+        });
+        if (response.status >= 200 && response.status < 400 && typeof response.data === 'string') {
+          return response.data;
+        }
       }
     }
 
@@ -142,22 +189,96 @@ class DownloadManager {
     return results;
   }
 
-  async _resolveTorrentFileIdsForGame(torrentFileName, requestedGameName) {
+  async _resolveTorrentFileEntriesForGame(torrentFileName, requestedGameName) {
     if (!torrentFileName || !requestedGameName) return [];
     const markdown = await this._loadIdsMarkdownForTorrent(torrentFileName);
     if (!markdown) return [];
     const parsedRows = this._parseMarkdownIdRows(markdown);
     if (parsedRows.length === 0) return [];
 
-    const target = this._normalizeForMatch(requestedGameName);
-    const exactIds = parsedRows
-      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)) === target)
-      .map((row) => row.id);
-    if (exactIds.length > 0) return exactIds;
+    const requestedBaseName = path.basename(String(requestedGameName || '')).trim().toLowerCase();
+    if (requestedBaseName) {
+      const rawExactRows = parsedRows.filter((row) => path.basename(String(row.fileName || '')).trim().toLowerCase() === requestedBaseName);
+      if (rawExactRows.length > 0) return rawExactRows;
+    }
 
-    return parsedRows
-      .filter((row) => this._normalizeForMatch(path.basename(row.fileName)).includes(target))
-      .map((row) => row.id);
+    const target = this._normalizeForMatch(requestedGameName);
+    const targetTokens = target.split(' ').filter(Boolean);
+
+    const scored = parsedRows.map((row) => {
+      const normalized = this._normalizeForMatch(path.basename(row.fileName));
+      const nameTokens = normalized.split(' ').filter(Boolean);
+      const commonTokenCount = targetTokens.filter((token) => nameTokens.includes(token)).length;
+      const tokenCoverage = targetTokens.length > 0 ? commonTokenCount / targetTokens.length : 0;
+      const isExact = normalized === target;
+      const isContains = normalized.includes(target) || target.includes(normalized);
+      const lengthDelta = Math.abs(normalized.length - target.length);
+
+      let rank = 99;
+      if (isExact) rank = 0;
+      else if (tokenCoverage >= 1) rank = 1;
+      else if (isContains && tokenCoverage >= 0.6) rank = 2;
+      else if (isContains) rank = 3;
+      else if (tokenCoverage >= 0.6) rank = 4;
+
+      return { row, rank, tokenCoverage, lengthDelta };
+    }).filter((entry) => entry.rank < 99);
+
+    if (scored.length === 0) return [];
+
+    scored.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (b.tokenCoverage !== a.tokenCoverage) return b.tokenCoverage - a.tokenCoverage;
+      if (a.lengthDelta !== b.lengthDelta) return a.lengthDelta - b.lengthDelta;
+      return a.row.id - b.row.id;
+    });
+
+    const best = scored[0];
+    return scored
+      .filter((entry) => entry.rank === best.rank && entry.lengthDelta === best.lengthDelta)
+      .map((entry) => entry.row);
+  }
+
+  async _resolveTorrentFileIdsForGame(torrentFileName, requestedGameName) {
+    const rows = await this._resolveTorrentFileEntriesForGame(torrentFileName, requestedGameName);
+    return rows.map((row) => row.id);
+  }
+
+  async _cleanupAria2NonSelectedFiles(destination, selectedEntries = []) {
+    if (!destination || selectedEntries.length === 0) return;
+
+    const allowedNames = new Set(
+      selectedEntries
+        .map((entry) => this._normalizeForMatch(path.basename(entry.fileName)))
+        .filter(Boolean)
+    );
+    if (allowedNames.size === 0) return;
+
+    const allFiles = [];
+    const walk = async (dir) => {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else {
+          allFiles.push(fullPath);
+        }
+      }
+    };
+    await walk(destination);
+
+    let removed = 0;
+    for (const filePath of allFiles) {
+      const normalized = this._normalizeForMatch(path.basename(filePath));
+      if (!allowedNames.has(normalized)) {
+        await fs.promises.unlink(filePath).catch(() => {});
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      this.downloadConsole.log(`aria2 cleanup removed ${removed} non-selected file(s) from ${destination}.`);
+    }
   }
 
   _applyFileSelection(torrent, selectedFileIds) {
@@ -182,24 +303,14 @@ class DownloadManager {
   }
 
   _buildAria2Args(torrentPath, destination, selectedIds = []) {
-    const args = [
-      '--seed-time=0',
-      '--file-allocation=none',
-      '--check-integrity=false',
-      '--bt-save-metadata=true',
-      '--follow-torrent=mem',
-      '--summary-interval=1',
-      '--enable-color=false',
-      '--console-log-level=warn',
-      '--download-result=default',
-      `--dir=${destination}`,
-    ];
+    const args = ['--seed-time=0', '--summary-interval=1', '--enable-color=false'];
 
     if (selectedIds.length > 0) {
       args.push(`--select-file=${selectedIds.join(',')}`);
     }
 
     args.push(torrentPath);
+    args.push('-d', destination);
     return args;
   }
 
@@ -249,9 +360,10 @@ class DownloadManager {
 
   async _runAria2ForTorrent(torrentFile, destination) {
     const requestedGameName = torrentFile.requestedGameName;
-    const ids = requestedGameName
-      ? await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName)
+    const selectedRows = requestedGameName
+      ? await this._resolveTorrentFileEntriesForGame(torrentFile.name, requestedGameName)
       : [];
+    const ids = selectedRows.map((row) => row.id);
     if (requestedGameName && ids.length === 0) {
       return { attempted: false, reason: 'no-id-match' };
     }
@@ -313,6 +425,7 @@ class DownloadManager {
       });
     });
 
+    await this._cleanupAria2NonSelectedFiles(destination, selectedRows);
     return { attempted: true, selectedIds: ids };
   }
 
@@ -341,7 +454,9 @@ class DownloadManager {
 
   _getPreferredTorrentClient() {
     const preferred = String(this.torrentClient || 'aria2').toLowerCase();
-    if (['webtorrent', 'aria2', 'qbittorrent'].includes(preferred)) return preferred;
+    if (preferred !== 'aria2') {
+      this.downloadConsole.log(`Torrent engine "${preferred}" requested; forcing aria2 mode (Minerva IDs README flow).`);
+    }
     return 'aria2';
   }
 
@@ -366,15 +481,6 @@ class DownloadManager {
     );
     if (torrentFiles.length === 0) return;
 
-    let WebTorrent;
-    try {
-      const mod = await import('webtorrent');
-      WebTorrent = mod.default;
-    } catch {
-      this.downloadConsole.log('Torrent payload download skipped: install `webtorrent` to enable it.');
-      return;
-    }
-
     for (const torrentFile of torrentFiles) {
       if (this.isCancelled) break;
       const destination = path.join(targetDir, path.parse(torrentFile.name).name);
@@ -392,12 +498,7 @@ class DownloadManager {
         numPeers: 0
       });
 
-      const externalOutcome = preferredEngine === 'aria2'
-        ? await this._tryAria2First(torrentFile, destination)
-        : preferredEngine === 'qbittorrent'
-          ? await this._tryQbittorrentFirst(torrentFile, destination)
-          : { attempted: false, reason: 'webtorrent-selected' };
-
+      const externalOutcome = await this._tryAria2First(torrentFile, destination);
       if (externalOutcome.attempted) {
         this.win.webContents.send('torrent-progress', {
           phase: 'done',
@@ -412,120 +513,24 @@ class DownloadManager {
         continue;
       }
 
-      const client = new WebTorrent();
-      try {
-        await new Promise((resolve, reject) => {
-          let lastActivityAt = Date.now();
-          let stalledWithoutPeers = true;
-          const markActivity = () => {
-            lastActivityAt = Date.now();
-            stalledWithoutPeers = false;
-          };
-          const stallCheckInterval = setInterval(() => {
-            const stalledFor = Date.now() - lastActivityAt;
-            if (stalledWithoutPeers && stalledFor >= DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS) {
-              try { client.destroy(); } catch (e) {}
-              reject(new Error(
-                `Timed out waiting for torrent transfer activity after ${Math.round(DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS / 1000)}s`
-              ));
-            }
-          }, 1000);
-
-          const cleanup = () => {
-            clearInterval(stallCheckInterval);
-            try { client.destroy(); } catch (e) {}
-          };
-
-          const torrent = client.add(torrentFile.path, { path: destination });
-          torrent.on('ready', async () => {
-            const requestedGameName = torrentFile.requestedGameName;
-            if (!requestedGameName) return;
-
-            try {
-              const ids = await this._resolveTorrentFileIdsForGame(torrentFile.name, requestedGameName);
-              const selectedByMapCount = this._applyFileSelection(torrent, ids);
-              if (selectedByMapCount > 0) {
-                this.downloadConsole.log(
-                  `Using Minerva ID mapping for ${torrentFile.name}: selected ${selectedByMapCount} file(s) for "${requestedGameName}".`
-                );
-                return;
-              }
-
-              const normalizedRequested = this._normalizeForMatch(requestedGameName);
-              const matchedByName = torrent.files
-                .map((f, idx) => ({ file: f, id: idx + 1 }))
-                .filter(({ file }) => this._normalizeForMatch(path.basename(file.path)).includes(normalizedRequested));
-              if (matchedByName.length > 0) {
-                const selectedCount = this._applyFileSelection(torrent, matchedByName.map(({ id }) => id));
-                this.downloadConsole.log(
-                  `Using filename match fallback for ${torrentFile.name}: selected ${selectedCount} file(s) for "${requestedGameName}".`
-                );
-                return;
-              }
-
-              this.downloadConsole.log(
-                `No Minerva ID/filename match found for "${requestedGameName}" in ${torrentFile.name}; downloading full torrent payload.`
-              );
-            } catch (mappingErr) {
-              this.downloadConsole.logError(
-                `Failed to apply Minerva ID mapping for ${torrentFile.name}: ${mappingErr.message || mappingErr}`
-              );
-            }
-          });
-          const onProgress = () => {
-            this.win.webContents.send('torrent-progress', {
-              phase: 'progress',
-              engine: 'webtorrent',
-              name: torrentFile.name,
-              current: torrent.downloaded || 0,
-              total: torrent.length || 0,
-              progress: torrent.progress || 0,
-              downloadSpeed: torrent.downloadSpeed || 0,
-              numPeers: torrent.numPeers || 0
-            });
-          };
-          torrent.on('wire', markActivity);
-          torrent.on('download', markActivity);
-          const progressInterval = setInterval(onProgress, 500);
-          torrent.on('error', (err) => {
-            clearInterval(progressInterval);
-            cleanup();
-            reject(err);
-          });
-          torrent.on('warning', () => {});
-          torrent.on('done', () => {
-            clearInterval(progressInterval);
-            onProgress();
-            cleanup();
-            resolve();
-          });
-        });
-        this.downloadConsole.log(`Torrent payload download complete: ${torrentFile.name}`);
-        this.win.webContents.send('torrent-progress', {
-          phase: 'done',
-          engine: 'webtorrent',
-          name: torrentFile.name,
-          current: 0,
-          total: 0,
-          progress: 1,
-          downloadSpeed: 0,
-          numPeers: 0
-        });
-      } catch (e) {
-        this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${e.message || e}`);
-        this.win.webContents.send('torrent-progress', {
-          phase: 'error',
-          engine: 'webtorrent',
-          name: torrentFile.name,
-          current: 0,
-          total: 0,
-          progress: 0,
-          downloadSpeed: 0,
-          numPeers: 0,
-          error: e.message || String(e)
-        });
-        try { client.destroy(); } catch (destroyErr) {}
-      }
+      const reason = externalOutcome.reason || 'aria2-not-run';
+      const error = reason === 'no-id-match'
+        ? `No Minerva IDs matched requested file for ${torrentFile.name}.`
+        : reason === 'aria2-not-installed'
+          ? 'aria2c is not installed on PATH.'
+          : `aria2 flow failed: ${reason}`;
+      this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${error}`);
+      this.win.webContents.send('torrent-progress', {
+        phase: 'error',
+        engine: preferredEngine,
+        name: torrentFile.name,
+        current: 0,
+        total: 0,
+        progress: 0,
+        downloadSpeed: 0,
+        numPeers: 0,
+        error
+      });
     }
   }
 

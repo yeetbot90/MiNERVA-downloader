@@ -19,6 +19,57 @@ import { HTTP_CLI_USER_AGENT, HTTP_USER_AGENT, MINERVA_TORRENT_CDN_BASE_URL } fr
  * @property {ConsoleService} downloadConsole - An instance of ConsoleService for logging download-related messages.
  */
 class DownloadService {
+  static LOCAL_TORRENT_DIR_CANDIDATES = [
+    path.resolve(process.cwd(), 'vendor/minerva-torrents'),
+    path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
+    path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
+    path.resolve(process.cwd(), 'torrents'),
+  ];
+
+  _normalizeTorrentName(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.torrent$/i, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  _findLocalTorrentPathByName(torrentFileName) {
+    const normalizedTarget = this._normalizeTorrentName(torrentFileName);
+    if (!normalizedTarget) return null;
+
+    for (const dirPath of DownloadService.LOCAL_TORRENT_DIR_CANDIDATES) {
+      if (!fs.existsSync(dirPath)) continue;
+
+      if (!this.localTorrentIndexByDir.has(dirPath)) {
+        let entries = [];
+        try {
+          entries = fs.readdirSync(dirPath, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.torrent'))
+            .map((entry) => entry.name);
+        } catch {
+          entries = [];
+        }
+        this.localTorrentIndexByDir.set(dirPath, entries);
+      }
+
+      const entryNames = this.localTorrentIndexByDir.get(dirPath) || [];
+      const exact = entryNames.find((entryName) => entryName === torrentFileName);
+      if (exact) return path.join(dirPath, exact);
+
+      const normalized = entryNames.find((entryName) => this._normalizeTorrentName(entryName) === normalizedTarget);
+      if (normalized) return path.join(dirPath, normalized);
+    }
+    return null;
+  }
+
+  _isLocalTorrentFileUrl(fileUrl) {
+    return typeof fileUrl === 'string' && fileUrl.startsWith('local-torrent://');
+  }
+
+  _decodeLocalTorrentFileUrl(fileUrl) {
+    return decodeURIComponent(String(fileUrl || '').replace(/^local-torrent:\/\//, ''));
+  }
+
   _getTorrentCandidates(origin, torrentPath) {
     if (!torrentPath || typeof torrentPath !== 'string') return [];
     const normalized = torrentPath.trim();
@@ -113,6 +164,14 @@ class DownloadService {
       const resolved = await this._pickReachableTorrentUrl(session, candidates);
       if (!resolved) return null;
       const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
+      const localTorrentPath = this._findLocalTorrentPathByName(suggestedName || torrentPath);
+      if (localTorrentPath) {
+        return {
+          href: `local-torrent://${encodeURIComponent(localTorrentPath)}`,
+          name: path.basename(localTorrentPath),
+          payloadSize,
+        };
+      }
       return {
         href: resolved,
         name: suggestedName || null,
@@ -145,6 +204,14 @@ class DownloadService {
       const resolved = await this._pickReachableTorrentUrl(session, candidates);
       if (!resolved) return null;
       const suggestedName = decodeURIComponent((new URL(resolved)).pathname.split('/').filter(Boolean).pop() || '');
+      const localTorrentPath = this._findLocalTorrentPathByName(suggestedName || extractedTorrentPath);
+      if (localTorrentPath) {
+        return {
+          href: `local-torrent://${encodeURIComponent(localTorrentPath)}`,
+          name: path.basename(localTorrentPath),
+          payloadSize: 0,
+        };
+      }
       return {
         href: resolved,
         name: suggestedName || null,
@@ -245,6 +312,7 @@ class DownloadService {
       }
     });
     this.hashDbByOrigin = new Map();
+    this.localTorrentIndexByDir = new Map();
   }
 
   /**
@@ -402,6 +470,30 @@ class DownloadService {
       }
 
       try {
+        if (this._isLocalTorrentFileUrl(fileUrl)) {
+          const localTorrentPath = this._decodeLocalTorrentFileUrl(fileUrl);
+          fs.copyFileSync(localTorrentPath, partPath);
+          fs.renameSync(partPath, targetPath);
+          const copiedSize = fs.statSync(targetPath).size;
+          totalDownloaded += copiedSize;
+          downloadedFiles.push({ ...fileInfo, name: filename, path: targetPath });
+          win.webContents.send('download-file-progress', {
+            name: filename,
+            current: copiedSize,
+            total: copiedSize,
+            currentFileIndex: initialSkippedFileCount + fileIndex + 1,
+            totalFilesToDownload: totalFilesOverall
+          });
+          win.webContents.send('download-overall-progress', {
+            current: totalDownloaded,
+            total: totalSize - totalBytesFailed,
+            skippedSize: initialDownloadedSize,
+            isFinal: false
+          });
+          this.downloadConsole.log(`Using local vendored torrent file: ${localTorrentPath}`);
+          continue;
+        }
+
           const response = await this._getDownloadStreamWithFallbackUserAgent(session, fileUrl, headers);
 
         if (response.status !== 200 && response.status !== 206) {

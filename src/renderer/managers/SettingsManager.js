@@ -33,7 +33,8 @@ class SettingsManager {
     this.uiManager.addInfoIconToElement('zoom-heading', 'zoomHeading');
     const torrentClientSelect = document.getElementById('torrent-client-select');
     if (torrentClientSelect) {
-      torrentClientSelect.value = stateService.get('torrentClient') || 'aria2';
+      torrentClientSelect.value = 'aria2';
+      stateService.set('torrentClient', 'aria2');
     }
   }
 
@@ -79,8 +80,11 @@ class SettingsManager {
     if (torrentClientSelect) {
       torrentClientSelect.addEventListener('change', (e) => {
         const value = e.target.value;
-        if (['webtorrent', 'aria2', 'qbittorrent'].includes(value)) {
+        if (value === 'aria2') {
           stateService.set('torrentClient', value);
+        } else {
+          stateService.set('torrentClient', 'aria2');
+          e.target.value = 'aria2';
         }
       });
     }
