@@ -83,6 +83,7 @@ class StateService {
       isThrottlingEnabled: false,
       throttleSpeed: 100,
       throttleUnit: 'KB/s',
+      torrentClient: 'aria2',
       savedFilters: [],
       christmasEffectActive: false, // Default value
       fireworkEffectActive: false, // Default value
@@ -98,6 +99,14 @@ class StateService {
     const storedFireworkEffectActive = localStorage.getItem('fireworkEffectActive');
     if (storedFireworkEffectActive !== null) {
       this.state.fireworkEffectActive = JSON.parse(storedFireworkEffectActive);
+    }
+
+    const storedTorrentClient = localStorage.getItem('torrentClient');
+    if (storedTorrentClient !== null) {
+      const parsedTorrentClient = JSON.parse(storedTorrentClient);
+      if (parsedTorrentClient === 'aria2') {
+        this.state.torrentClient = parsedTorrentClient;
+      }
     }
   }
 
@@ -174,7 +183,7 @@ class StateService {
     this.state[key] = value;
 
     // Persist specific keys to localStorage
-    if (key === 'christmasEffectActive' || key === 'fireworkEffectActive') {
+    if (key === 'christmasEffectActive' || key === 'fireworkEffectActive' || key === 'torrentClient') {
       localStorage.setItem(key, JSON.stringify(value));
     }
 

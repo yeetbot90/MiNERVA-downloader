@@ -33,7 +33,7 @@ class BreadcrumbManager {
 
         const isRootView = directoryStack.length === 0;
         const rootClickableClasses = isRootView ? '' : 'cursor-pointer hover:text-orange-500';
-        let html = `<span title="Myrient Downloader" class="truncate ${rootClickableClasses} transition-all duration-200" data-step="0">Myrient Downloader</span>`;
+        let html = `<span title="MiNERVA Downloader" class="truncate ${rootClickableClasses} transition-all duration-200" data-step="0">MiNERVA Downloader</span>`;
 
         directoryStack.forEach((item, index) => {
             const isLast = index === directoryStack.length - 1;
