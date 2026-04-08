@@ -47,19 +47,58 @@ class DownloadManager {
       .trim();
   }
 
+  /**
+   * Normalizes a torrent/map name for comparison.
+   * Converts various separator formats (spaces, underscores, dashes) to a consistent format.
+   * Removes .torrent and -ids.md suffixes.
+   */
   _normalizeTorrentMapName(value) {
     return String(value || '')
       .toLowerCase()
       .replace(/\.torrent(?:-ids\.md)?$/i, '')
-      .replace(/[^a-z0-9]+/g, '')
+      .replace(/[ _-]+/g, ' ')
+      .replace(/^\s+|\s+$/g, '')
+      .trim();
+  }
+
+  /**
+   * Normalizes a name for containment-based matching, keeping it compact without separators.
+   * Used for containment checks in markdown file lookup.
+   */
+  _normalizeTorrentMapNameCompact(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.torrent(?:-ids\.md)?$/i, '')
+      .replace(/[^a-z0-9]/g, '')
       .trim();
   }
 
   async _findLocalIdsMapPath(fileName) {
-    const directPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    // First, try the direct path with the expected naming convention
+    // Expected format: Minerva_Myrient_-_No-Intro_-_Nintendo_-_Game_Boy.torrent-ids.md
+    let expectedFileName = fileName;
+    if (!fileName.endsWith('-ids.md')) {
+      // If given a .torrent file name, convert to the expected markdown file name
+      // E.g., "Minerva_Myrient - No-Intro - Nintendo - Game Boy.torrent" 
+      // -> "Minerva_Myrient_-_No-Intro_-_Nintendo_-_Game_Boy.torrent-ids.md"
+      expectedFileName = fileName
+        .replace(/\.torrent$/i, '.torrent-ids.md')
+        .replace(/ /g, '_');
+    }
+
+    const directPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, expectedFileName);
     try {
       await fs.promises.access(directPath, fs.constants.R_OK);
       return directPath;
+    } catch {
+      // continue to fuzzy lookup
+    }
+
+    // Try exact match with original filename
+    const originalDirectPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
+    try {
+      await fs.promises.access(originalDirectPath, fs.constants.R_OK);
+      return originalDirectPath;
     } catch {
       // continue to fuzzy lookup
     }
@@ -77,14 +116,24 @@ class DownloadManager {
       .map((entry) => entry.name);
     if (mdNames.length === 0) return null;
 
+    // Try exact match with normalized names
     const exact = mdNames.find((name) => this._normalizeTorrentMapName(name) === target);
     if (exact) return path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, exact);
 
+    // Try loose match - containment check with normalized names
     const loose = mdNames.find((name) => {
       const normalized = this._normalizeTorrentMapName(name);
       return normalized.includes(target) || target.includes(normalized);
     });
-    return loose ? path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, loose) : null;
+    if (loose) return path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, loose);
+
+    // Try matching with the compact normalization (removes all separators)
+    const compactTarget = this._normalizeTorrentMapNameCompact(target);
+    const compactLoose = mdNames.find((name) => {
+      const normalized = this._normalizeTorrentMapNameCompact(name);
+      return normalized.includes(compactTarget) || compactTarget.includes(normalized);
+    });
+    return compactLoose ? path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, compactLoose) : null;
   }
 
   async _loadIdsMarkdownForTorrent(torrentName) {
