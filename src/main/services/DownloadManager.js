@@ -64,11 +64,13 @@ class DownloadManager {
   /**
    * Normalizes a name for containment-based matching, keeping it compact without separators.
    * Used for containment checks in markdown file lookup.
+   * Removes .torrent, -ids.md, and all non-alphanumeric characters for comparison.
    */
   _normalizeTorrentMapNameCompact(value) {
     return String(value || '')
       .toLowerCase()
       .replace(/\.torrent(?:-ids\.md)?$/i, '')
+      .replace(/\.torrent/i, '')
       .replace(/[^a-z0-9]/g, '')
       .trim();
   }
@@ -80,10 +82,12 @@ class DownloadManager {
     if (!fileName.endsWith('-ids.md')) {
       // If given a .torrent file name, convert to the expected markdown file name
       // E.g., "Minerva_Myrient - No-Intro - Nintendo - Game Boy.torrent" 
-      // -> "Minerva_Myrient_-_No-Intro_-_Nintendo_-_Game_Boy.torrent-ids.md"
+      // -> "Minerva_Myrient_-_No-Intro_-_Nintendo_-_Game_Boy-ids.md"
+      // The markdown naming uses "name-ids.md" not "name.torrent-ids.md"
       expectedFileName = fileName
-        .replace(/\.torrent$/i, '.torrent-ids.md')
-        .replace(/ /g, '_');
+        .replace(/\.torrent$/i, '')
+        .replace(/ /g, '_')
+        .trim() + '-ids.md';
     }
 
     const directPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, expectedFileName);
@@ -127,8 +131,8 @@ class DownloadManager {
     });
     if (loose) return path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, loose);
 
-    // Try matching with the compact normalization (removes all separators)
-    const compactTarget = this._normalizeTorrentMapNameCompact(target);
+    // Try matching with the compact normalization (removes all separators and .torrent/-ids.md)
+    const compactTarget = this._normalizeTorrentMapNameCompact(fileName);
     const compactLoose = mdNames.find((name) => {
       const normalized = this._normalizeTorrentMapNameCompact(name);
       return normalized.includes(compactTarget) || compactTarget.includes(normalized);
