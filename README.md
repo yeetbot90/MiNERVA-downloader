@@ -4,7 +4,7 @@
 ## I am going to try revive the downloader.
 ## Currently not working, I am trying to fix it.
 
-A powerful, standalone desktop application designed to provide a secure and efficient interface for accessing, filtering, and downloading public domain game archives from the MiNERVA https://minerva-archive.org/ library.
+A powerful, standalone desktop application designed to provide a secure and efficient interface for accessing, filtering, and downloading public domain game archives from the MiNERVA https://minerva-archive.org/ library. Big thanks to Caprico1 for the torrent markdown files.
 
 Download the latest release here:
 
