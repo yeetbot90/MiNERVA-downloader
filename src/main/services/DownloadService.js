@@ -43,21 +43,31 @@ class DownloadService {
       if (!this.localTorrentIndexByDir.has(dirPath)) {
         let entries = [];
         try {
-          entries = fs.readdirSync(dirPath, { withFileTypes: true })
-            .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.torrent'))
-            .map((entry) => entry.name);
+          const stack = [dirPath];
+          while (stack.length > 0) {
+            const currentDir = stack.pop();
+            const dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
+            for (const entry of dirEntries) {
+              const fullPath = path.join(currentDir, entry.name);
+              if (entry.isDirectory()) {
+                stack.push(fullPath);
+              } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.torrent')) {
+                entries.push(fullPath);
+              }
+            }
+          }
         } catch {
           entries = [];
         }
         this.localTorrentIndexByDir.set(dirPath, entries);
       }
 
-      const entryNames = this.localTorrentIndexByDir.get(dirPath) || [];
-      const exact = entryNames.find((entryName) => entryName === torrentFileName);
-      if (exact) return path.join(dirPath, exact);
+      const fullPaths = this.localTorrentIndexByDir.get(dirPath) || [];
+      const exact = fullPaths.find((fullPath) => path.basename(fullPath) === torrentFileName);
+      if (exact) return exact;
 
-      const normalized = entryNames.find((entryName) => this._normalizeTorrentName(entryName) === normalizedTarget);
-      if (normalized) return path.join(dirPath, normalized);
+      const normalized = fullPaths.find((fullPath) => this._normalizeTorrentName(path.basename(fullPath)) === normalizedTarget);
+      if (normalized) return normalized;
     }
     return null;
   }
