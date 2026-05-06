@@ -3,13 +3,16 @@
  * @type {string}
  */
 export const MYRIENT_BASE_URL = 'https://minerva-archive.org/browse/';
+export const MINERVA_TORRENT_CDN_BASE_URL = 'https://cdn.minerva-archive.org/torrents/';
+export const MINERVA_IDS_RAW_BASE_URL = 'https://raw.githubusercontent.com/yeetbot90/Minerva-archive-ids/main/markdown-files/';
 
 /**
  * Identifies this app on HTTP requests (browse scrape, HEAD, GET). Keep in sync with package.json version.
  * @type {string}
  */
 export const HTTP_USER_AGENT =
-  'MiNERVA-Downloader/4.0.2 (+https://minerva-archive.org; desktop browse/download)';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
+export const HTTP_CLI_USER_AGENT = 'curl/8.7.1';
 /**
  * Defines the possible directory structures for downloaded files.
  * @readonly

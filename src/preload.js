@@ -57,7 +57,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Starts the download process with the specified settings.
    * @returns {Promise<object>} A promise that resolves when the download begins.
    */
-  startDownload: (baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit) => ipcRenderer.invoke('start-download', baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit),
+  startDownload: (baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient) => ipcRenderer.invoke('start-download', baseUrl, files, targetDir, createSubfolder, maintainFolderStructure, extractAndDelete, extractPreviouslyDownloaded, skipScan, isThrottlingEnabled, throttleSpeed, throttleUnit, torrentClient),
   /**
    * Cancels the ongoing download operation.
    */
