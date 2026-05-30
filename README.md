@@ -14,7 +14,7 @@ Download the latest release here:
 
 Please consider donating to support my work and MiNERVA's service.
 
-<a href="https://ko-fi.com/bradrevans"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Me-orange?style=flat-square"></a>
+<a href="https://ko-fi.com/yeetbot90"><img alt="Static Badge" src="https://img.shields.io/badge/Donate-To%20Support%20Me-orange?style=flat-square"></a>
 
 <a href="https://minerva-archive.org/"><img alt="Static Badge" src="https://img.shields.io/badge/Support-MiNERVA-blue?style=flat-square"></a>
 
