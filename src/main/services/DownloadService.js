@@ -24,6 +24,7 @@ class DownloadService {
     path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
     path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
     path.resolve(process.cwd(), 'torrents'),
+    path.resolve(process.cwd(), 'torrent files'),
   ];
 
   _normalizeTorrentName(value) {

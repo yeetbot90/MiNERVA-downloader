@@ -303,7 +303,7 @@ class DownloadManager {
   }
 
   _buildAria2Args(torrentPath, destination, selectedIds = []) {
-    const args = ['--seed-time=0', '--summary-interval=1', '--enable-color=false'];
+    const args = ['--summary-interval=1', '--enable-color=false'];
 
     if (selectedIds.length > 0) {
       args.push(`--select-file=${selectedIds.join(',')}`);
