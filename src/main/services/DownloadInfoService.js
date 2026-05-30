@@ -15,6 +15,90 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @class
  */
 class DownloadInfoService {
+  static LOCAL_TORRENT_DIR_CANDIDATES = [
+    path.resolve(process.cwd(), 'vendor/minerva-torrents'),
+    path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
+    path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
+    path.resolve(process.cwd(), 'torrent'),
+    path.resolve(process.cwd(), 'torrents'),
+    path.resolve(process.cwd(), 'torrent files'),
+  ];
+
+  _normalizeTorrentName(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\.torrent$/i, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  _findLocalTorrentPathByName(torrentFileName) {
+    const normalizedTarget = this._normalizeTorrentName(torrentFileName);
+    if (!normalizedTarget) return null;
+
+    for (const dirPath of DownloadInfoService.LOCAL_TORRENT_DIR_CANDIDATES) {
+      if (!fs.existsSync(dirPath)) continue;
+
+      if (!this.localTorrentIndexByDir.has(dirPath)) {
+        let entries = [];
+        try {
+          const stack = [dirPath];
+          while (stack.length > 0) {
+            const currentDir = stack.pop();
+            const dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
+            for (const entry of dirEntries) {
+              const fullPath = path.join(currentDir, entry.name);
+              if (entry.isDirectory()) {
+                stack.push(fullPath);
+              } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.torrent')) {
+                entries.push(fullPath);
+              }
+            }
+          }
+        } catch {
+          entries = [];
+        }
+        this.localTorrentIndexByDir.set(dirPath, entries);
+      }
+
+      const fullPaths = this.localTorrentIndexByDir.get(dirPath) || [];
+      const exact = fullPaths.find((fullPath) => path.basename(fullPath) === torrentFileName);
+      if (exact) return exact;
+
+      const normalized = fullPaths.find((fullPath) => this._normalizeTorrentName(path.basename(fullPath)) === normalizedTarget);
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+
+  _getLocalTorrentMetadataFromRomUrl(fileUrl) {
+    try {
+      const parsed = new URL(fileUrl);
+      const slug = parsed.searchParams.get('name');
+      if (!slug) return null;
+
+      const parts = slug
+        .replace(/^\.\/+/, '')
+        .replace(/^Minerva_Myrient\//i, '')
+        .split(/[\\/]+/)
+        .filter(Boolean);
+      if (parts.length < 2) return null;
+
+      const requestedFileName = parts.pop();
+      const torrentFileName = `Minerva_Myrient - ${parts.join(' - ')}.torrent`;
+      const localTorrentPath = this._findLocalTorrentPathByName(torrentFileName);
+      if (!localTorrentPath) return null;
+
+      return {
+        href: `local-torrent://${encodeURIComponent(localTorrentPath)}`,
+        name: path.basename(localTorrentPath),
+        requestedFileName,
+        payloadSize: 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   _isRomMetadataUrl(fileUrl) {
     try {
       const u = new URL(fileUrl);
@@ -44,6 +128,9 @@ class DownloadInfoService {
     const parsed = new URL(fileUrl);
     const slug = parsed.searchParams.get('name');
     if (!slug) return null;
+    const localTorrentMetadata = this._getLocalTorrentMetadataFromRomUrl(fileUrl);
+    if (localTorrentMetadata) return localTorrentMetadata;
+
     try {
       const db = await this._getHashesDb(session, parsed.origin);
       const stmt = db.prepare('SELECT torrents, size FROM files WHERE full_path = ? LIMIT 1');
@@ -122,6 +209,7 @@ class DownloadInfoService {
       }
     });
     this.hashDbByOrigin = new Map();
+    this.localTorrentIndexByDir = new Map();
   }
 
   /**
@@ -235,6 +323,9 @@ class DownloadInfoService {
         if (resolved?.href) {
           fileUrl = resolved.href;
           fileInfo.href = resolved.href;
+          if (resolved.requestedFileName && !fileInfo.requestedGameName) {
+            fileInfo.requestedGameName = resolved.requestedFileName;
+          }
           if (resolved.name) {
             filename = resolved.name;
             fileInfo.name = resolved.name;

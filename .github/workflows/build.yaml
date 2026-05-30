@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Configure git user
@@ -59,20 +59,45 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump_version.outputs.tag || github.ref_name }}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build executable
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Linux launch test dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libfuse2t64 libatk1.0-0 libatk-bridge2.0-0 libcups2 libgtk-3-0 libnss3 libxss1 libasound2t64
+
+      - name: Build single-file executable
         run: |
-          npm install --no-audit --no-fund
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             npm run build:win:portable
           else
             npm run build:linux
           fi
-          exec_name=$(find "${{ env.RELEASE_DIR }}" -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.dmg' \) -exec basename {} \;)
+          mapfile -t executables < <(find "${{ env.RELEASE_DIR }}" -maxdepth 1 -type f \( -name '*.AppImage' -o -name '*.exe' \) -print)
+          if [ "${#executables[@]}" -ne 1 ]; then
+            echo "Expected exactly one single-file executable artifact, found ${#executables[@]}:" >&2
+            find "${{ env.RELEASE_DIR }}" -maxdepth 2 -type f -print >&2
+            exit 1
+          fi
+          exec_name=$(basename "${executables[0]}")
           echo "ARTIFACT_NAME=$exec_name" >> "$GITHUB_ENV"
-          echo "FILENAME=${{ env.RELEASE_DIR }}/$exec_name" >> "$GITHUB_ENV"
+          echo "FILENAME=${executables[0]}" >> "$GITHUB_ENV"
+
+      - name: Smoke test executable launch
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "\$p = Start-Process -FilePath \$env:FILENAME -PassThru; Start-Sleep -Seconds 10; if (\$p.HasExited) { exit \$p.ExitCode }; Stop-Process -Id \$p.Id -Force"
+          else
+            chmod +x "$FILENAME"
+            status=0
+            APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a timeout 20s "$FILENAME" --no-sandbox || status=$?
+            if [ "$status" != "0" ] && [ "$status" != "124" ]; then
+              exit "$status"
+            fi
+          fi
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

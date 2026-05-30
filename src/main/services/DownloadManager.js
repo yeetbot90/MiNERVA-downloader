@@ -23,6 +23,21 @@ class DownloadManager {
     '../../../vendor/minerva-archive-ids/markdown-files'
   );
 
+  static LOCAL_MINERVA_IDS_DIR_CANDIDATES = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../vendor/minerva-archive-ids/markdown-files'),
+    path.resolve(process.cwd(), 'markdown'),
+    path.resolve(process.cwd(), 'vendor/minerva-archive-ids/markdown-files'),
+  ];
+
+  static ARIA2_BINARY_NAME = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
+
+  static LOCAL_ARIA2_DIR_CANDIDATES = [
+    path.resolve(process.cwd(), 'aria2'),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../aria2'),
+    path.resolve(process.resourcesPath || process.cwd(), 'aria2'),
+    path.resolve(process.resourcesPath || process.cwd(), 'app.asar.unpacked/aria2'),
+  ];
+
   _normalizeForMatch(value) {
     let normalized = String(value || '')
       .replace(/^.*[\\/]/, '')
@@ -56,35 +71,40 @@ class DownloadManager {
   }
 
   async _findLocalIdsMapPath(fileName) {
-    const directPath = path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, fileName);
-    try {
-      await fs.promises.access(directPath, fs.constants.R_OK);
-      return directPath;
-    } catch {
-      // continue to fuzzy lookup
-    }
-
-    let dirEntries = [];
-    try {
-      dirEntries = await fs.promises.readdir(DownloadManager.LOCAL_MINERVA_IDS_DIR, { withFileTypes: true });
-    } catch {
-      return null;
-    }
-
     const target = this._normalizeTorrentMapName(fileName);
-    const mdNames = dirEntries
-      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('-ids.md'))
-      .map((entry) => entry.name);
-    if (mdNames.length === 0) return null;
 
-    const exact = mdNames.find((name) => this._normalizeTorrentMapName(name) === target);
-    if (exact) return path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, exact);
+    for (const dirPath of DownloadManager.LOCAL_MINERVA_IDS_DIR_CANDIDATES) {
+      const directPath = path.join(dirPath, fileName);
+      try {
+        await fs.promises.access(directPath, fs.constants.R_OK);
+        return directPath;
+      } catch {
+        // continue to fuzzy lookup in this candidate directory
+      }
 
-    const loose = mdNames.find((name) => {
-      const normalized = this._normalizeTorrentMapName(name);
-      return normalized.includes(target) || target.includes(normalized);
-    });
-    return loose ? path.join(DownloadManager.LOCAL_MINERVA_IDS_DIR, loose) : null;
+      let dirEntries = [];
+      try {
+        dirEntries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      const mdNames = dirEntries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('-ids.md'))
+        .map((entry) => entry.name);
+      if (mdNames.length === 0) continue;
+
+      const exact = mdNames.find((name) => this._normalizeTorrentMapName(name) === target);
+      if (exact) return path.join(dirPath, exact);
+
+      const loose = mdNames.find((name) => {
+        const normalized = this._normalizeTorrentMapName(name);
+        return normalized.includes(target) || target.includes(normalized);
+      });
+      if (loose) return path.join(dirPath, loose);
+    }
+
+    return null;
   }
 
   async _loadIdsMarkdownForTorrent(torrentName) {
@@ -247,12 +267,17 @@ class DownloadManager {
   async _cleanupAria2NonSelectedFiles(destination, selectedEntries = []) {
     if (!destination || selectedEntries.length === 0) return;
 
+    const allowedBasenames = new Set(
+      selectedEntries
+        .map((entry) => path.basename(String(entry.fileName || '')).trim().toLowerCase())
+        .filter(Boolean)
+    );
     const allowedNames = new Set(
       selectedEntries
         .map((entry) => this._normalizeForMatch(path.basename(entry.fileName)))
         .filter(Boolean)
     );
-    if (allowedNames.size === 0) return;
+    if (allowedBasenames.size === 0 && allowedNames.size === 0) return;
 
     const allFiles = [];
     const walk = async (dir) => {
@@ -270,8 +295,9 @@ class DownloadManager {
 
     let removed = 0;
     for (const filePath of allFiles) {
+      const basename = path.basename(filePath).trim().toLowerCase();
       const normalized = this._normalizeForMatch(path.basename(filePath));
-      if (!allowedNames.has(normalized)) {
+      if (!allowedBasenames.has(basename) && (allowedBasenames.size > 0 || !allowedNames.has(normalized))) {
         await fs.promises.unlink(filePath).catch(() => {});
         removed += 1;
       }
@@ -302,8 +328,28 @@ class DownloadManager {
     return selectedCount;
   }
 
+  _getAria2ExecutablePath() {
+    for (const dirPath of DownloadManager.LOCAL_ARIA2_DIR_CANDIDATES) {
+      const candidate = path.join(dirPath, DownloadManager.ARIA2_BINARY_NAME);
+      try {
+        if (fs.existsSync(candidate)) return candidate;
+      } catch {
+        // Continue to the next candidate and eventually fall back to PATH.
+      }
+    }
+    return 'aria2c';
+  }
+
   _buildAria2Args(torrentPath, destination, selectedIds = []) {
-    const args = ['--summary-interval=1', '--enable-color=false'];
+    const args = [
+      '--summary-interval=1',
+      '--enable-color=false',
+      '--seed-time=0',
+      '--bt-remove-unselected-file=true',
+      '--continue=true',
+      '--file-allocation=none',
+      `--bt-stop-timeout=${Math.ceil(DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS / 1000)}`,
+    ];
 
     if (selectedIds.length > 0) {
       args.push(`--select-file=${selectedIds.join(',')}`);
@@ -369,24 +415,80 @@ class DownloadManager {
     }
 
     const args = this._buildAria2Args(torrentFile.path, destination, ids);
-    await new Promise((resolve, reject) => {
-      const proc = spawn('aria2c', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stderr = '';
-      let stdoutBuffer = '';
-      proc.stdout.on('data', (chunk) => {
-        const text = String(chunk || '');
-        if (!text) return;
-        stdoutBuffer += text;
+    const executablePath = this._getAria2ExecutablePath();
+    this.downloadConsole.log(`Launching aria2c from ${executablePath} for ${torrentFile.name}.`);
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        let stallTimer = null;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          if (stallTimer) clearInterval(stallTimer);
+          if (this.activeAria2Process === proc) this.activeAria2Process = null;
+          fn(value);
+        };
+        const proc = spawn(executablePath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        this.activeAria2Process = proc;
+        let stderr = '';
+        let stdoutBuffer = '';
+        let lastActiveAt = Date.now();
+        let lastDownloadedBytes = 0;
+        stallTimer = setInterval(() => {
+          if (Date.now() - lastActiveAt > DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS) {
+            this.downloadConsole.logError(`aria2c stalled for ${torrentFile.name}; stopping torrent payload download.`);
+            proc.kill('SIGTERM');
+            finish(reject, new Error('aria2c stalled with no peers or payload progress'));
+          }
+        }, 5000);
+        const noteAria2Progress = (parsed) => {
+          if (!parsed) return;
+          if (parsed.current > lastDownloadedBytes || parsed.downloadSpeed > 0 || parsed.numPeers > 0) {
+            lastDownloadedBytes = Math.max(lastDownloadedBytes, parsed.current);
+            lastActiveAt = Date.now();
+          }
+        };
+        proc.stdout.on('data', (chunk) => {
+          const text = String(chunk || '');
+          if (!text) return;
+          stdoutBuffer += text;
 
-        let newlineIndex = stdoutBuffer.indexOf('\n');
-        while (newlineIndex !== -1) {
-          const rawLine = stdoutBuffer.slice(0, newlineIndex);
-          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-          const line = rawLine.trim();
-          if (line) {
-            this.downloadConsole.log(`[aria2] ${line}`);
-            const parsed = this._parseAria2ProgressLine(line);
+          let newlineIndex = stdoutBuffer.indexOf('\n');
+          while (newlineIndex !== -1) {
+            const rawLine = stdoutBuffer.slice(0, newlineIndex);
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            const line = rawLine.trim();
+            if (line) {
+              this.downloadConsole.log(`[aria2] ${line}`);
+              const parsed = this._parseAria2ProgressLine(line);
+              if (parsed) {
+                noteAria2Progress(parsed);
+                this.win.webContents.send('torrent-progress', {
+                  phase: 'progress',
+                  engine: 'aria2',
+                  name: torrentFile.name,
+                  ...parsed,
+                });
+              }
+            }
+            newlineIndex = stdoutBuffer.indexOf('\n');
+          }
+        });
+        proc.stderr.on('data', (chunk) => {
+          const text = String(chunk || '').trim();
+          if (text) {
+            stderr += `${text}\n`;
+            this.downloadConsole.log(`[aria2] ${text}`);
+          }
+        });
+        proc.on('error', (err) => finish(reject, err));
+        proc.on('close', (code) => {
+          const trailing = stdoutBuffer.trim();
+          if (trailing) {
+            this.downloadConsole.log(`[aria2] ${trailing}`);
+            const parsed = this._parseAria2ProgressLine(trailing);
             if (parsed) {
+              noteAria2Progress(parsed);
               this.win.webContents.send('torrent-progress', {
                 phase: 'progress',
                 engine: 'aria2',
@@ -395,35 +497,17 @@ class DownloadManager {
               });
             }
           }
-          newlineIndex = stdoutBuffer.indexOf('\n');
-        }
-      });
-      proc.stderr.on('data', (chunk) => {
-        const text = String(chunk || '').trim();
-        if (text) {
-          stderr += `${text}\n`;
-          this.downloadConsole.log(`[aria2] ${text}`);
-        }
-      });
-      proc.on('error', (err) => reject(err));
-      proc.on('close', (code) => {
-        const trailing = stdoutBuffer.trim();
-        if (trailing) {
-          this.downloadConsole.log(`[aria2] ${trailing}`);
-          const parsed = this._parseAria2ProgressLine(trailing);
-          if (parsed) {
-            this.win.webContents.send('torrent-progress', {
-              phase: 'progress',
-              engine: 'aria2',
-              name: torrentFile.name,
-              ...parsed,
-            });
+          if (this.isCancelled) {
+            return finish(reject, new Error('CANCELLED_TORRENT_PAYLOAD'));
           }
-        }
-        if (code === 0) return resolve();
-        reject(new Error(`aria2c exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+          if (code === 0) return finish(resolve);
+          finish(reject, new Error(`aria2c exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+        });
       });
-    });
+    } catch (error) {
+      await this._cleanupAria2NonSelectedFiles(destination, selectedRows);
+      throw error;
+    }
 
     await this._cleanupAria2NonSelectedFiles(destination, selectedRows);
     return { attempted: true, selectedIds: ids };
@@ -444,10 +528,10 @@ class DownloadManager {
     } catch (error) {
       const message = String(error?.message || error);
       if (/ENOENT|not found/i.test(message)) {
-        this.downloadConsole.log('aria2c not found on PATH, falling back to built-in WebTorrent.');
+        this.downloadConsole.log('aria2c not found in the bundled aria2 folder or on PATH.');
         return { attempted: false, reason: 'aria2-not-installed' };
       }
-      this.downloadConsole.logError(`aria2c failed for ${torrentFile.name}: ${message}. Falling back to WebTorrent.`);
+      this.downloadConsole.logError(`aria2c failed for ${torrentFile.name}: ${message}.`);
       return { attempted: false, reason: 'aria2-failed' };
     }
   }
@@ -517,7 +601,7 @@ class DownloadManager {
       const error = reason === 'no-id-match'
         ? `No Minerva IDs matched requested file for ${torrentFile.name}.`
         : reason === 'aria2-not-installed'
-          ? 'aria2c is not installed on PATH.'
+          ? 'aria2c was not found in the bundled aria2 folder or on PATH.'
           : `aria2 flow failed: ${reason}`;
       this.downloadConsole.logError(`Torrent payload download failed for ${torrentFile.name}: ${error}`);
       this.win.webContents.send('torrent-progress', {
@@ -548,6 +632,7 @@ class DownloadManager {
     this.downloadService = downloadService;
     this.isCancelled = false;
     this.torrentClient = 'aria2';
+    this.activeAria2Process = null;
   }
 
   /**
@@ -558,6 +643,9 @@ class DownloadManager {
     this.isCancelled = true;
     this.downloadInfoService.cancel();
     this.downloadService.cancel();
+    if (this.activeAria2Process && !this.activeAria2Process.killed) {
+      this.activeAria2Process.kill('SIGTERM');
+    }
   }
 
   /**
