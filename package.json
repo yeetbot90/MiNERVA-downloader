@@ -40,7 +40,16 @@
     "appId": "org.minerva.downloader",
     "productName": "MiNERVA Downloader",
     "files": [
-      "**/*"
+      "src/**/*",
+      "assets/**/*",
+      "aria2/**/*",
+      "torrent files/**/*.torrent",
+      "vendor/minerva-archive-ids/markdown-files/**/*.md",
+      "package.json",
+      "!release/**",
+      "!screenshots/**",
+      "!test-seed/**",
+      "!**/*.map"
     ],
     "directories": {
       "output": "release"
@@ -56,6 +65,12 @@
     "linux": {
       "target": "AppImage",
       "icon": "assets/icon.png"
-    }
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "aria2/**",
+      "node_modules/sql.js/dist/sql-wasm.wasm"
+    ]
   }
 }

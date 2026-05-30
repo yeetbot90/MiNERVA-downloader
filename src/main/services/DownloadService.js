@@ -23,6 +23,7 @@ class DownloadService {
     path.resolve(process.cwd(), 'vendor/minerva-torrents'),
     path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
     path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
+    path.resolve(process.cwd(), 'torrent'),
     path.resolve(process.cwd(), 'torrents'),
     path.resolve(process.cwd(), 'torrent files'),
   ];
@@ -134,6 +135,36 @@ class DownloadService {
     }
   }
 
+
+  _getLocalTorrentMetadataFromRomUrl(fileUrl) {
+    try {
+      const parsed = new URL(fileUrl);
+      const slug = parsed.searchParams.get('name');
+      if (!slug) return null;
+
+      const parts = slug
+        .replace(/^\.\/+/, '')
+        .replace(/^Minerva_Myrient\//i, '')
+        .split(/[\\/]+/)
+        .filter(Boolean);
+      if (parts.length < 2) return null;
+
+      const requestedFileName = parts.pop();
+      const torrentFileName = `Minerva_Myrient - ${parts.join(' - ')}.torrent`;
+      const localTorrentPath = this._findLocalTorrentPathByName(torrentFileName);
+      if (!localTorrentPath) return null;
+
+      return {
+        href: `local-torrent://${encodeURIComponent(localTorrentPath)}`,
+        name: path.basename(localTorrentPath),
+        requestedFileName,
+        payloadSize: 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async _getHashesDb(session, origin) {
     if (!this.hashDbByOrigin.has(origin)) {
       const loadPromise = (async () => {
@@ -155,6 +186,9 @@ class DownloadService {
     const origin = parsed.origin;
     const slug = parsed.searchParams.get('name');
     if (!slug) return null;
+
+    const localTorrentMetadata = this._getLocalTorrentMetadataFromRomUrl(fileUrl);
+    if (localTorrentMetadata) return localTorrentMetadata;
 
     try {
       const db = await this._getHashesDb(session, origin);
@@ -431,6 +465,9 @@ class DownloadService {
         const resolved = await this._resolveRomMetadataUrl(session, fileUrl);
         if (resolved?.href) {
           fileUrl = resolved.href;
+          if (resolved.requestedFileName && !fileInfo.requestedGameName) {
+            fileInfo.requestedGameName = resolved.requestedFileName;
+          }
           if (resolved.name) {
             filename = resolved.name;
             fileInfo.name = resolved.name;
