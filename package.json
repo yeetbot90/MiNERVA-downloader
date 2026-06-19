@@ -70,6 +70,7 @@
     "asar": true,
     "asarUnpack": [
       "aria2/**",
+      "torrent files/**",
       "node_modules/sql.js/dist/sql-wasm.wasm"
     ]
   }

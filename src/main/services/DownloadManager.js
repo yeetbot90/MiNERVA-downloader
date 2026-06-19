@@ -32,10 +32,10 @@ class DownloadManager {
   static ARIA2_BINARY_NAME = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
 
   static LOCAL_ARIA2_DIR_CANDIDATES = [
+    path.resolve(process.resourcesPath || process.cwd(), 'app.asar.unpacked/aria2'),
     path.resolve(process.cwd(), 'aria2'),
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../aria2'),
     path.resolve(process.resourcesPath || process.cwd(), 'aria2'),
-    path.resolve(process.resourcesPath || process.cwd(), 'app.asar.unpacked/aria2'),
   ];
 
   _normalizeForMatch(value) {
@@ -493,7 +493,9 @@ class DownloadManager {
             stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
             const line = rawLine.trim();
             if (line) {
-              this.downloadConsole.log(`[aria2] ${line}`);
+              if (!/^\[#[0-9a-f]+ |^FILE:|^[=\-]{10}/i.test(line)) {
+                this.downloadConsole.log(`[aria2] ${line}`);
+              }
               const parsed = this._parseAria2ProgressLine(line);
               if (parsed) {
                 noteAria2Progress(parsed);
@@ -519,7 +521,9 @@ class DownloadManager {
         proc.on('close', (code) => {
           const trailing = stdoutBuffer.trim();
           if (trailing) {
-            this.downloadConsole.log(`[aria2] ${trailing}`);
+            if (!/^\[#[0-9a-f]+ |^FILE:|^[=\-]{10}/i.test(trailing)) {
+              this.downloadConsole.log(`[aria2] ${trailing}`);
+            }
             const parsed = this._parseAria2ProgressLine(trailing);
             if (parsed) {
               noteAria2Progress(parsed);
@@ -541,6 +545,17 @@ class DownloadManager {
     } catch (error) {
       throw error;
     }
+
+    // Clean up the .torrent file and any .aria2 control files aria2 leaves behind.
+    await fs.promises.unlink(torrentFile.path).catch(() => {});
+    try {
+      const entries = await fs.promises.readdir(destination, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.toLowerCase().endsWith('.aria2')) {
+          await fs.promises.unlink(path.join(destination, entry.name)).catch(() => {});
+        }
+      }
+    } catch { }
 
     return { attempted: true, selectedIds: ids };
   }
