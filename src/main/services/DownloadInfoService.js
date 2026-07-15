@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
-import { URL } from 'url';
+import { URL, fileURLToPath } from 'url';
 import axios from 'axios';
 import initSqlJs from 'sql.js';
 import { createRequire } from 'module';
@@ -15,14 +15,19 @@ import { HTTP_USER_AGENT } from '../../shared/constants/appConstants.js';
  * @class
  */
 class DownloadInfoService {
-  static LOCAL_TORRENT_DIR_CANDIDATES = [
-    path.resolve(process.cwd(), 'vendor/minerva-torrents'),
-    path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
-    path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
-    path.resolve(process.cwd(), 'torrent'),
-    path.resolve(process.cwd(), 'torrents'),
-    path.resolve(process.cwd(), 'torrent files'),
-  ];
+  static LOCAL_TORRENT_DIR_CANDIDATES = (() => {
+    const srcDir = path.dirname(fileURLToPath(import.meta.url));
+    return [
+      path.join(process.resourcesPath || '', 'app.asar.unpacked', 'torrent files'),
+      path.resolve(srcDir, '../../../torrent files'),
+      path.resolve(process.cwd(), 'vendor/minerva-torrents'),
+      path.resolve(process.cwd(), 'vendor/minerva-archive-torrents'),
+      path.resolve(process.cwd(), 'vendor/minerva-archive-ids/torrents'),
+      path.resolve(process.cwd(), 'torrent'),
+      path.resolve(process.cwd(), 'torrents'),
+      path.resolve(process.cwd(), 'torrent files'),
+    ];
+  })();
 
   _normalizeTorrentName(value) {
     return String(value || '')
@@ -204,7 +209,11 @@ class DownloadInfoService {
     const require = createRequire(import.meta.url);
     this.sqlInitPromise = initSqlJs({
       locateFile: (file) => {
-        if (file === 'sql-wasm.wasm') return require.resolve('sql.js/dist/sql-wasm.wasm');
+        if (file === 'sql-wasm.wasm') {
+          const unpackedWasm = path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+          if (fs.existsSync(unpackedWasm)) return unpackedWasm;
+          try { return require.resolve('sql.js/dist/sql-wasm.wasm'); } catch { return file; }
+        }
         return file;
       }
     });

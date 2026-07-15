@@ -32,10 +32,10 @@ class DownloadManager {
   static ARIA2_BINARY_NAME = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
 
   static LOCAL_ARIA2_DIR_CANDIDATES = [
+    path.resolve(process.resourcesPath || process.cwd(), 'app.asar.unpacked/aria2'),
     path.resolve(process.cwd(), 'aria2'),
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../aria2'),
     path.resolve(process.resourcesPath || process.cwd(), 'aria2'),
-    path.resolve(process.resourcesPath || process.cwd(), 'app.asar.unpacked/aria2'),
   ];
 
   _normalizeForMatch(value) {
@@ -347,6 +347,7 @@ class DownloadManager {
       '--seed-time=0',
       '--bt-remove-unselected-file=true',
       '--continue=true',
+      '--allow-overwrite=true',
       '--file-allocation=none',
       `--bt-stop-timeout=${Math.ceil(DownloadManager.TORRENT_PAYLOAD_STALL_TIMEOUT_MS / 1000)}`,
     ];
@@ -404,14 +405,47 @@ class DownloadManager {
     return { current, total, progress, downloadSpeed, numPeers };
   }
 
-  async _runAria2ForTorrent(torrentFile, destination) {
-    const requestedGameName = torrentFile.requestedGameName;
-    const selectedRows = requestedGameName
-      ? await this._resolveTorrentFileEntriesForGame(torrentFile.name, requestedGameName)
-      : [];
-    const ids = selectedRows.map((row) => row.id);
-    if (requestedGameName && ids.length === 0) {
-      return { attempted: false, reason: 'no-id-match' };
+  async _resolveExistingFileIds(torrentFileName, destination) {
+    const markdown = await this._loadIdsMarkdownForTorrent(torrentFileName);
+    if (!markdown) return [];
+    const allRows = this._parseMarkdownIdRows(markdown);
+    if (allRows.length === 0) return [];
+
+    const existingBasenames = new Set();
+    const walk = async (dir) => {
+      let entries;
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (entry.isDirectory()) await walk(path.join(dir, entry.name));
+        else existingBasenames.add(entry.name.trim().toLowerCase());
+      }
+    };
+    await walk(destination);
+    if (existingBasenames.size === 0) return [];
+
+    return allRows
+      .filter((row) => existingBasenames.has(path.basename(row.fileName).trim().toLowerCase()))
+      .map((row) => row.id);
+  }
+
+  async _runAria2ForTorrent(torrentFile, destination, requestedGameNames = []) {
+    const names = requestedGameNames.filter(Boolean);
+    let ids = [];
+    if (names.length > 0) {
+      const rowArrays = await Promise.all(
+        names.map((name) => this._resolveTorrentFileEntriesForGame(torrentFile.name, name))
+      );
+      ids = [...new Set(rowArrays.flat().map((row) => row.id))];
+      if (ids.length === 0) {
+        return { attempted: false, reason: 'no-id-match' };
+      }
+    }
+
+    const existingIds = await this._resolveExistingFileIds(torrentFile.name, destination);
+    if (existingIds.length > 0) {
+      const merged = new Set([...ids, ...existingIds]);
+      ids = [...merged];
+      this.downloadConsole.log(`Preserving ${existingIds.length} already-downloaded file(s) in selection.`);
     }
 
     const args = this._buildAria2Args(torrentFile.path, destination, ids);
@@ -459,7 +493,9 @@ class DownloadManager {
             stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
             const line = rawLine.trim();
             if (line) {
-              this.downloadConsole.log(`[aria2] ${line}`);
+              if (!/^\[#[0-9a-f]+ |^FILE:|^[=\-]{10}/i.test(line)) {
+                this.downloadConsole.log(`[aria2] ${line}`);
+              }
               const parsed = this._parseAria2ProgressLine(line);
               if (parsed) {
                 noteAria2Progress(parsed);
@@ -485,7 +521,9 @@ class DownloadManager {
         proc.on('close', (code) => {
           const trailing = stdoutBuffer.trim();
           if (trailing) {
-            this.downloadConsole.log(`[aria2] ${trailing}`);
+            if (!/^\[#[0-9a-f]+ |^FILE:|^[=\-]{10}/i.test(trailing)) {
+              this.downloadConsole.log(`[aria2] ${trailing}`);
+            }
             const parsed = this._parseAria2ProgressLine(trailing);
             if (parsed) {
               noteAria2Progress(parsed);
@@ -505,17 +543,26 @@ class DownloadManager {
         });
       });
     } catch (error) {
-      await this._cleanupAria2NonSelectedFiles(destination, selectedRows);
       throw error;
     }
 
-    await this._cleanupAria2NonSelectedFiles(destination, selectedRows);
+    // Clean up the .torrent file and any .aria2 control files aria2 leaves behind.
+    await fs.promises.unlink(torrentFile.path).catch(() => {});
+    try {
+      const entries = await fs.promises.readdir(destination, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.toLowerCase().endsWith('.aria2')) {
+          await fs.promises.unlink(path.join(destination, entry.name)).catch(() => {});
+        }
+      }
+    } catch { }
+
     return { attempted: true, selectedIds: ids };
   }
 
-  async _tryAria2First(torrentFile, destination) {
+  async _tryAria2First(torrentFile, destination, requestedGameNames = []) {
     try {
-      const outcome = await this._runAria2ForTorrent(torrentFile, destination);
+      const outcome = await this._runAria2ForTorrent(torrentFile, destination, requestedGameNames);
       if (outcome.attempted) {
         const selectedInfo = outcome.selectedIds?.length
           ? `${outcome.selectedIds.length} selected file id(s)`
@@ -565,9 +612,22 @@ class DownloadManager {
     );
     if (torrentFiles.length === 0) return;
 
+    // Group entries by torrent name so all requested games from the same torrent
+    // are passed to aria2 in a single invocation with a combined --select-file list.
+    const torrentGroups = new Map();
     for (const torrentFile of torrentFiles) {
+      const key = torrentFile.name;
+      if (!torrentGroups.has(key)) {
+        torrentGroups.set(key, { torrentFile, requestedGameNames: [] });
+      }
+      if (torrentFile.requestedGameName) {
+        torrentGroups.get(key).requestedGameNames.push(torrentFile.requestedGameName);
+      }
+    }
+
+    for (const { torrentFile, requestedGameNames } of torrentGroups.values()) {
       if (this.isCancelled) break;
-      const destination = path.join(targetDir, path.parse(torrentFile.name).name);
+      const destination = targetDir;
       await fs.promises.mkdir(destination, { recursive: true });
       this.downloadConsole.log(`Starting torrent payload download for ${torrentFile.name}`);
       const preferredEngine = this._getPreferredTorrentClient();
@@ -582,7 +642,7 @@ class DownloadManager {
         numPeers: 0
       });
 
-      const externalOutcome = await this._tryAria2First(torrentFile, destination);
+      const externalOutcome = await this._tryAria2First(torrentFile, destination, requestedGameNames);
       if (externalOutcome.attempted) {
         this.win.webContents.send('torrent-progress', {
           phase: 'done',

@@ -1,6 +1,6 @@
 {
   "name": "minerva-downloader",
-  "version": "4.1.2",
+  "version": "4.1.3",
   "description": "A desktop app to browse, filter, and download from MiNERVA.",
   "main": "src/main/main.js",
   "type": "module",
@@ -70,6 +70,7 @@
     "asar": true,
     "asarUnpack": [
       "aria2/**",
+      "torrent files/**",
       "node_modules/sql.js/dist/sql-wasm.wasm"
     ]
   }
